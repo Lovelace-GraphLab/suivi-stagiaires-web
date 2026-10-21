@@ -833,6 +833,8 @@ const Sync=(()=>{
   async function start(){
     if(!sb)return;
     syncHook=schedule;
+    // au démarrage, on revérifie toute la liste des fichiers (quelques Ko) : une fiche perdue sur ce poste revient toute seule
+    meta.fsince=null;
     try{await pull();await flush()}catch(e){setStatus('hors ligne')}
     sb.channel('suivi')
       .on('postgres_changes',{event:'*',schema:'public',table:'items'},p=>p.new?.id&&applyRows([p.new]))
