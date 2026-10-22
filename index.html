@@ -1322,7 +1322,7 @@ function renderChrome(){
   $('#brand').classList.toggle('click',app);
   if(view==='admin'){
     $('#brand').title='';
-    $('#brand').innerHTML=`<div class="avatar sm">👩‍🏫</div><div><div class="bn">Espace tuteur</div><div class="bs">${store.profiles.length} stagiaire(s) suivi(s)</div></div>`;
+    $('#brand').innerHTML=`<div class="avatar sm"><img src="assets/icons/icon-192.png" alt="" style="transform:none"></div><div><div class="bn">Espace tuteur</div><div class="bs">${store.profiles.length} stagiaire(s) suivi(s)</div></div>`;
   }
   $('#tools').innerHTML=view==='admin'
     ?`<button class="btn wood" data-t="export">⬇ Sauvegarde</button><button class="btn wood" data-t="import">⬆ Restaurer</button><button class="btn wood" data-t="code">🔑 Code tuteur</button>`
