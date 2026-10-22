@@ -491,6 +491,7 @@ details summary{cursor:pointer;font-weight:600}
 .tpc{margin-bottom:30px;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
 .tpc input{width:22px;height:22px;accent-color:var(--brick);flex:none;margin:2px 0 0}
 .tidle{display:flex;flex-wrap:wrap;gap:8px}
+.tproj.tcharte span{font-weight:600;color:var(--brick)}
 .bav img[src*="icons/"]{border-radius:50%;border:4px solid var(--paper)}
 
 @media print{
@@ -768,7 +769,9 @@ const Sync=(()=>{
   }
 
   // ---- fichiers ----
-  const pathOf=f=>{const pr=store.profiles.find(x=>x.data?.projects?.some(p=>p.id===f.projectId));return pr?`${pr.id}/${f.projectId}/${f.id}`:null};
+  const pathOf=f=>{
+    if(String(f.projectId).startsWith('charte:'))return `${f.projectId.split(':')[1]}/${f.projectId}/${f.id}`;   // charte d'un client : charte:<profil>:<client>
+    const pr=store.profiles.find(x=>x.data?.projects?.some(p=>p.id===f.projectId));return pr?`${pr.id}/${f.projectId}/${f.id}`:null};
   const strip=f=>{const {blob,uploaded,path,pvBlob,...m}=f;return m};
   function queueFile(op,id,path){
     meta.fileQueue=meta.fileQueue.filter(q=>q.id!==id); meta.fileQueue.push({op,id,path}); keep(); schedule();
@@ -1120,6 +1123,7 @@ const RULES={src:'NomClient-NomProjet',img:'NomClient-TypeImage',mock:'NomClient
 const IMG_EXT=['jpg','jpeg','png','webp','gif','tif','tiff','heic','svg'];
 // règles souples (un minimum de logique suffit), sauf pour les BAT qui doivent respecter AAMMJJ-NOMCLIENT-Projet
 function checkName(name,key,p){
+  if(p.charte)return {state:'free'};   // charte du client : fichiers fournis par le client, pas de règle de nommage
   const ck=norm(p.client); if(!ck)return {state:'noclient'};
   const [base,ext]=splitExt(name), e=ext.toLowerCase();
   const parts=base.split(/[-_\s'’.]+/).filter(Boolean), rest=parts.slice(1).map(norm);
@@ -1142,6 +1146,7 @@ function checkName(name,key,p){
 }
 function nameTag(f,p){
   const r=checkName(f.name,folderOf(f),p);
+  if(r.state==='free')return '';
   if(r.state==='noclient')return '<span class="chip">Client du projet à renseigner</span>';
   if(r.state==='ok')return '<span class="chip okc">✅ Bien nommé</span>';
   return `<span class="chip badc">⚠ À renommer${r.strict?' · format obligatoire':''}</span>
@@ -1160,7 +1165,7 @@ const NAMING_GUIDE=`<div class="guide"><div class="kicker">🏷️ Bien nommer s
 async function rewardFile(f,p){
   if(f.rewarded)return;
   const r=checkName(f.name,folderOf(f),p), pl=state.player;
-  if(r.state==='noclient')return;
+  if(r.state==='noclient'||r.state==='free'||!pl)return;
   if(r.state!=='ok'){pl.nameStreak=0;save();return}
   f.rewarded=true; await putFile(f);
   pl.filesOk++; pl.nameStreak++; pl.bestNameStreak=Math.max(pl.bestNameStreak,pl.nameStreak);
@@ -1171,7 +1176,7 @@ async function rewardFile(f,p){
 }
 // bonus quand les 5 dossiers du projet sont remplis et tous les fichiers bien nommés
 async function checkFolderDone(p){
-  if(p.folderDone)return;
+  if(p.folderDone||p.charte)return;
   const fs=await filesOf(p.id);
   if(FOLDERS.every(([k])=>fs.some(f=>folderOf(f)===k))&&fs.every(f=>checkName(f.name,folderOf(f),p).state==='ok')){
     p.folderDone=true; state.player.folders++; grant(XP_FOLDER,`Dossier impeccable : ${p.name}`);
@@ -1180,8 +1185,29 @@ async function checkFolderDone(p){
 // ---- rangement dans le Google Drive de l'agence (appli installée) ----
 // Prénom Nom / Client / Projet / Dossier / fichier : un niveau par stagiaire pour ne pas mélanger les fichiers
 const safeName=s=>String(s||'').replace(/[\\/:*?"<>|]+/g,'-').replace(/\s+/g,' ').trim().replace(/[. ]+$/,'')||'_';
-const FOLDER_LABEL=Object.fromEntries(FOLDERS);
-const driveDir=(p,key)=>[safeName(`${profile.first} ${profile.last}`),safeName(p.client||'Sans client'),safeName(p.name),key?FOLDER_LABEL[key]:null].filter(Boolean).join('/');
+// « Charte » de chaque client (logo, typo, textures) : commune à tous les projets du client, rangée à côté d'eux
+const CHARTE_FOLDERS=[['logo','Logo'],['typo','Typo'],['texture','Texture']];
+const FOLDER_LABEL=Object.fromEntries([...FOLDERS,...CHARTE_FOLDERS]);
+// pseudo-projet « Charte » d'un client (pas synchronisé en tant que projet : ses fichiers portent son identifiant)
+const charteOf=(client,pr=profile)=>({id:`charte:${pr.id}:${norm(client)||'_'}`,client,name:'Charte',charte:true,versions:{}});
+const isCharte=id=>String(id||'').startsWith('charte:');
+// dossier ouvert dans l'onglet Fichiers : un projet, ou la charte d'un client
+const curFileProject=()=>{
+  if(!isCharte(ui.fileProject))return state.projects.find(x=>x.id===ui.fileProject);
+  const c=state.projects.map(p=>p.client).find(c=>c&&charteOf(c).id===ui.fileProject); return c?charteOf(c):null;
+};
+const driveDir=(p,key)=>[safeName(`${profile.first} ${profile.last}`),safeName(p.client||'Sans client'),
+  p.charte?'CHARTE':safeName(p.name),key?(p.charte?FOLDER_LABEL[key].toUpperCase():FOLDER_LABEL[key]):null].filter(Boolean).join('/');
+// appli installée : chaque dossier client du Drive reçoit automatiquement CHARTE/LOGO, TYPO, TEXTURE
+const madeCharte=new Set();
+function ensureCharteDirs(){
+  const W=driveFiles(); if(!W?.mkdir||!profile)return;
+  W.root().then(root=>{if(!root)return;
+    for(const c of new Set(state.projects.map(p=>p.client).filter(Boolean))){
+      const k=profile.id+'|'+c; if(madeCharte.has(k))continue; madeCharte.add(k);
+      for(const [key] of CHARTE_FOLDERS)W.mkdir(driveDir(charteOf(c),key)).catch(()=>{});
+    }});
+}
 const driveFiles=()=>window.desktop?.files||null;
 async function chooseDriveRoot(){
   const W=driveFiles(); if(!W)return;
@@ -1265,7 +1291,7 @@ async function renameFile(fid,p){
 }
 // aperçu d'un fichier (images, PDF, .ai « compatibles PDF ») + ses corrections (le tuteur les écrit ici, le stagiaire les coche « corrigé ») ;
 // ← → passent au fichier suivant du projet (pratique pour une série de posts)
-const FOLDER_ORDER=Object.fromEntries(FOLDERS.map(([k],i)=>[k,i]));
+const FOLDER_ORDER=Object.fromEntries([...FOLDERS,...CHARTE_FOLDERS].map(([k],i)=>[k,i]));
 async function openPreview(f,p,after){
   const d=$('#vdlg'), e=splitExt(f.name)[1].toLowerCase();
   const list=(await filesOf(p.id)).sort((a,b)=>FOLDER_ORDER[folderOf(a)]-FOLDER_ORDER[folderOf(b)]||(a.v||0)-(b.v||0)||a.name.localeCompare(b.name,'fr'));
@@ -1562,37 +1588,43 @@ function fileLine(f,p){
 async function renderFiles(){
   const ps=[...state.projects].sort((a,b)=>!a.client-!b.client||(a.client||'').localeCompare(b.client||'','fr')||a.name.localeCompare(b.name,'fr'));
   if(!ps.length){main.innerHTML='<h2 class="title" style="font-size:46px">Mes fichiers</h2><div class="empty" style="padding:30px 0">Aucun dossier pour le moment.</div><button class="btn primary" data-a="newfolder">+ Nouveau dossier client / projet</button>';return}
-  if(!ps.some(p=>p.id===ui.fileProject))ui.fileProject=(ps.find(p=>p.status!=='done')||ps[0]).id;
-  const p=ps.find(x=>x.id===ui.fileProject), byId=Object.fromEntries(ps.map(x=>[x.id,x]));
+  // une « Charte » par client (en plus de ses projets)
+  const chartes=[...new Set(ps.map(x=>x.client).filter(Boolean))].map(c=>charteOf(c));
+  if(!ps.some(p=>p.id===ui.fileProject)&&!chartes.some(c=>c.id===ui.fileProject))ui.fileProject=(ps.find(p=>p.status!=='done')||ps[0]).id;
+  const byId=Object.fromEntries([...ps,...chartes].map(x=>[x.id,x])), p=byId[ui.fileProject];
+  ensureCharteDirs();
   const all=(await allFiles()).filter(f=>byId[f.projectId]);
   const W=driveFiles(), root=W?await W.root():null;
   if(view!=='app'||ui.tab!=='files')return;   // l'onglet a changé pendant le chargement
   fileURLs.forEach(u=>URL.revokeObjectURL(u)); fileURLs=[];
   const fs=all.filter(f=>f.projectId===p.id);
   const groups={}; ps.forEach(x=>(groups[x.client||'']=groups[x.client||'']||[]).push(x));
+  const tbtn=x=>`<button class="tproj ${x.id===p.id?'on':''} ${x.charte?'tcharte':''}" data-a="fproj" data-pid="${x.id}" ${x.charte?`data-client="${esc(x.client)}"`:''}><span>${x.charte?'🎨 Charte':'📂 '+esc(x.name)}</span><small>${all.filter(f=>f.projectId===x.id).length}</small></button>`;
   const tree=Object.entries(groups).map(([c,list])=>`<div class="tclient">📁 ${c?esc(c):'Client ?'}</div>`+
-    list.map(x=>`<button class="tproj ${x.id===p.id?'on':''}" data-a="fproj" data-pid="${x.id}"><span>📂 ${esc(x.name)}</span><small>${all.filter(f=>f.projectId===x.id).length}</small></button>`).join('')).join('');
-  const ok=all.filter(f=>checkName(f.name,folderOf(f),byId[f.projectId]).state==='ok').length;
+    (c?tbtn(charteOf(c)):'')+list.map(tbtn).join('')).join('');
+  const named=all.filter(f=>!isCharte(f.projectId));   // le score de nommage ne compte pas la charte (fichiers du client)
+  const ok=named.filter(f=>checkName(f.name,folderOf(f),byId[f.projectId]).state==='ok').length;
   const fx=state.player.fileXP?.date===today()?state.player.fileXP.xp:0;
   main.innerHTML=`<div class="weekbar"><h2 class="title" style="font-size:46px">Mes fichiers</h2>
-    <div class="fscore note creme"><b>${all.length?Math.round(ok/all.length*100):0} %</b>de fichiers bien nommés<br><small>XP fichiers aujourd'hui : ${fx} / ${FILE_XP_CAP}</small></div></div>
+    <div class="fscore note creme"><b>${named.length?Math.round(ok/named.length*100):0} %</b>de fichiers bien nommés<br><small>XP fichiers aujourd'hui : ${fx} / ${FILE_XP_CAP}</small></div></div>
   <div class="files">
     <aside class="side"><div class="tree lined"><div class="kicker">Arborescence</div>${tree}<button class="btn sm newf" data-a="newfolder">+ Nouveau dossier client / projet</button></div>${NAMING_GUIDE}</aside>
     <section>
       <div class="fhead"><div class="fpath">${esc(p.client||'Client ?')} › ${esc(p.name)}</div>
-        <label class="fclient">Client <input id="f_client" value="${esc(p.client||'')}" placeholder="Nom du client"></label>
+        ${p.charte?'':`<label class="fclient">Client <input id="f_client" value="${esc(p.client||'')}" placeholder="Nom du client"></label>`}
         ${p.folderDone?'<span class="badge ok">🗂️ Dossier impeccable</span>':''}
         ${root?'<button class="btn sm" data-a="revealdir" title="Ouvre le dossier de ce projet dans le Google Drive">📂 Ouvrir le dossier</button>':''}</div>
       ${W&&!root?`<div class="note" style="margin-bottom:22px"><b>Dossier Google Drive à choisir.</b> Sur cet ordinateur, les fichiers déposés sont rangés dans le Google Drive de l'agence. Choisis une fois le dossier « Suivi Stagiaires » du Drive (code tuteur).<br><button class="btn primary sm" style="margin-top:10px" data-a="driveroot">📁 Choisir le dossier Google Drive</button></div>`
         :root&&tutor?`<p class="hint" style="margin:-10px 0 18px">Fichiers rangés dans : ${esc(root)} · <a href="#" data-a="driveroot">changer</a></p>`:''}
-      ${p.client?'':'<div class="note" style="margin-bottom:22px">Renseigne le nom du client ci-dessus pour activer la vérification des noms de fichiers et gagner de l\'XP.</div>'}
-      <div class="folders">${FOLDERS.map(([k,l])=>{const ff=fs.filter(f=>folderOf(f)===k);
+      ${p.charte?`<p class="hint" style="margin:-10px 0 18px">Les éléments de la charte graphique de ${esc(p.client)}, communs à tous ses projets : logos, polices, textures. Pas de règle de nommage ici.</p>`
+        :p.client?'':'<div class="note" style="margin-bottom:22px">Renseigne le nom du client ci-dessus pour activer la vérification des noms de fichiers et gagner de l\'XP.</div>'}
+      <div class="folders">${(p.charte?CHARTE_FOLDERS:FOLDERS).map(([k,l])=>{const ff=fs.filter(f=>folderOf(f)===k);
         return `<div class="folder" data-key="${k}"><div class="ftab">${l} <small>${ff.length}</small>${k==='bat'?'<span class="must">obligatoire</span>':''}</div>
           <div class="fbody">
             <div class="fdrop" data-folder="${k}">Glisse tes fichiers ici ou clique${k==='livrables'?'<br><small>chaque dépôt = une nouvelle version (V1, V2…)</small>':''}</div>
             ${k==='livrables'?livrablesHTML(ff,p):ff.map(f=>fileLine(f,p)).join('')}
           </div></div>`}).join('')}</div>
-      <p class="tip">+${XP_FILE} XP par fichier bien nommé (+${XP_BAT} pour un BAT) · +${XP_FOLDER} XP quand les 5 dossiers sont remplis et bien nommés · max ${FILE_XP_CAP} XP fichiers par jour.</p>
+      <p class="tip" ${p.charte?'hidden':''}>+${XP_FILE} XP par fichier bien nommé (+${XP_BAT} pour un BAT) · +${XP_FOLDER} XP quand les 5 dossiers sont remplis et bien nommés · max ${FILE_XP_CAP} XP fichiers par jour.</p>
     </section></div>`;
   // arrivée depuis une carte ou une fiche projet : on montre le dossier demandé
   loadThumbs();
@@ -2126,14 +2158,14 @@ function ensureDemo(){
 /* ---------- événements de l'espace ---------- */
 // onglet Fichiers : dépôt, renommage, téléchargement
 const fileIn=$('#fileIn');
-fileIn.onchange=async()=>{const p=state.projects.find(x=>x.id===ui.fileProject);
+fileIn.onchange=async()=>{const p=curFileProject();
   if(p)await addToFolder(p,fileIn.dataset.folder,[...fileIn.files]); fileIn.value=''; render();};
 main.addEventListener('click',async e=>{
   const drop=e.target.closest('.fdrop');
   if(drop){fileIn.dataset.folder=drop.dataset.folder;fileIn.click();return}
   const fa=e.target.closest('.fline [data-fa]');
   if(fa){
-    const line=fa.closest('.fline'), p=state.projects.find(x=>x.id===line.dataset.pid), a=fa.dataset.fa;
+    const line=fa.closest('.fline'), p=isCharte(line.dataset.pid)?curFileProject():state.projects.find(x=>x.id===line.dataset.pid), a=fa.dataset.fa;
     if(a==='ren'){await renameFile(line.dataset.fid,p);return render()}
     const f=(await filesOf(p.id)).find(x=>x.id===line.dataset.fid); if(!f)return;
     if(a==='rm'){if(await ask(`Supprimer « ${f.name} » ?`)){await delFile(f.id);await refreshCounts();render()}return}
@@ -2165,7 +2197,7 @@ main.addEventListener('click',async e=>{
 main.addEventListener('dragover',e=>{const d=e.target.closest('.fdrop');if(!d)return;e.preventDefault();d.classList.add('over')});
 main.addEventListener('dragleave',e=>{e.target.closest?.('.fdrop')?.classList.remove('over')});
 main.addEventListener('drop',async e=>{const d=e.target.closest('.fdrop');if(!d||!e.dataTransfer.files.length)return;e.preventDefault();
-  const p=state.projects.find(x=>x.id===ui.fileProject); if(p)await addToFolder(p,d.dataset.folder,[...e.dataTransfer.files]); render();});
+  const p=curFileProject(); if(p)await addToFolder(p,d.dataset.folder,[...e.dataTransfer.files]); render();});
 main.addEventListener('change',e=>{
   if(e.target.matches('.ver [data-vc]')){ // commentaire du tuteur sur une version livrée
     const box=e.target.closest('.ver'), p=state.projects.find(x=>x.id===box.dataset.pid);
@@ -2194,7 +2226,7 @@ main.addEventListener('click',async e=>{
   else if(a==='fproj'){ui.fileProject=el.dataset.pid;render()}
   else if(a==='newfolder')openNewFolder();
   else if(a==='driveroot'){e.preventDefault();chooseDriveRoot()}
-  else if(a==='revealdir'){const p=state.projects.find(x=>x.id===ui.fileProject);if(p)driveFiles()?.reveal(driveDir(p))}
+  else if(a==='revealdir'){const p=curFileProject();if(p)driveFiles()?.reveal(driveDir(p))}
   else if(a==='notif')enableNotifications();
   else if(a==='tutorpc'){
     const on=el.checked; try{localStorage.setItem(POSTE_KEY,on?'1':'0')}catch(e){}
