@@ -2438,9 +2438,13 @@ if(window.desktop){
     if(pin==null)return;
     if(hash('tutor',pin)===store.tutorPin)window.desktop.quit(); else notify('Code tuteur incorrect.');
   });
-  // nouvelle version de l'interface téléchargée en arrière-plan
-  window.desktop.onUiUpdated(()=>ask('Une nouvelle version de l\'appli est prête.',{ok:'Mettre à jour maintenant',cancel:'Plus tard',danger:false})
-    .then(y=>{if(y)window.desktop.reloadUi()}));
+  // nouvelle version de l'interface téléchargée en arrière-plan (vérifiée toutes les 30 min) :
+  // fenêtre rangée → on recharge tout de suite, sans rien demander ; fenêtre ouverte → on propose, et sinon ce sera à la prochaine fermeture
+  window.desktop.onUiUpdated(()=>{
+    uiPending=true;
+    if(hiddenDesktop())return applyUiUpdate();
+    ask('Une nouvelle version de l\'appli est prête.',{ok:'Mettre à jour maintenant',cancel:'Plus tard',danger:false}).then(y=>{if(y)applyUiUpdate()});
+  });
 }
 // compagnon flottant (appli installée) : visible quand la grande fenêtre est fermée ; il reçoit l'état et renvoie ses actions
 function pushWidget(){
@@ -2464,8 +2468,19 @@ function pushWidget(){
 }
 // grande fenêtre cachée : les messages passent par la bulle du compagnon
 // (la coquille signale quand la fenêtre est rangée, la page elle-même reste « visible » pour garder ses minuteries)
-let appHidden=false; const visWaiters=[];
-window.desktop?.onAppVisible?.(v=>{appHidden=!v;if(v)visWaiters.splice(0).forEach(r=>r())});
+// rechargée pendant qu'elle était rangée (mise à jour) : elle le sait encore au redémarrage de la page
+let appHidden=(()=>{try{const v=sessionStorage.getItem('suivi-hidden')==='1';sessionStorage.removeItem('suivi-hidden');return v}catch(e){return false}})();
+const visWaiters=[];
+let uiPending=false;
+function applyUiUpdate(){
+  if(visWaiters.length)return;   // une animation (niveau, trophée…) attend la réouverture : on mettra à jour après
+  try{sessionStorage.setItem('suivi-hidden',hiddenDesktop()?'1':'')}catch(e){}
+  window.desktop.reloadUi();
+}
+window.desktop?.onAppVisible?.(v=>{
+  appHidden=!v; if(v)visWaiters.splice(0).forEach(r=>r());
+  if(!v&&uiPending)setTimeout(()=>{if(appHidden)applyUiUpdate()},2000);   // fenêtre fermée avec une mise à jour en attente
+});
 const hiddenDesktop=()=>!!window.desktop?.widgetSay&&(appHidden||document.visibilityState==='hidden');
 if(window.desktop?.onWidgetAction){
   window.desktop.onWidgetAction(a=>{
