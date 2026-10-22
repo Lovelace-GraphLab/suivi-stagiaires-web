@@ -2445,17 +2445,32 @@ function newCorrections(old,meta){
 
 /* ---------- le tuteur est prévenu de l'inactivité (même si le stagiaire a coupé le son) ---------- */
 // côté stagiaire : « inactif depuis… » puis « de retour », envoyés via la synchro (table settings, id presence:<profil>)
-let presenceIdle=false;
+let presenceIdle=false, presenceSince=null;
+const sendPresence=()=>Sync.setPresence(profile.id,{idle:presenceIdle,since:presenceSince,at:Date.now(),first:profile.first});
 function reportPresence(idle,seconds=0){
   if(!profile||tutor||view!=='app'||presenceIdle===idle)return;
-  presenceIdle=idle;
-  Sync.setPresence(profile.id,{idle,since:idle?Date.now()-seconds*1000:null,at:Date.now(),first:profile.first});
+  presenceIdle=idle; presenceSince=idle?Date.now()-seconds*1000:null;
+  sendPresence();
 }
+// « en ligne » : l'appli du stagiaire redit son état toutes les 5 min ; sans nouvelles depuis 12 min, le tuteur le voit « hors ligne »
+const PRESENCE_EVERY=5*60e3, PRESENCE_STALE=12*60e3;
+setInterval(()=>{if(profile&&!tutor&&view==='app'&&!PHONE)sendPresence()},PRESENCE_EVERY);
+setInterval(()=>{if(isTutorPC())pushWidget()},60e3);   // poste tuteur : durées et « hors ligne » à jour dans l'ours
 // côté tuteur : seulement sur le poste coché « Ce poste est celui du tuteur » (réglage local, pas synchronisé)
 const POSTE_KEY='suivi-poste-tuteur';
 const isTutorPC=()=>{try{return localStorage.getItem(POSTE_KEY)==='1'}catch(e){return false}};
 const presence={}, alerted={};   // dernier état connu par stagiaire · début d'inactivité déjà signalé
-const idleNow=()=>Object.entries(presence).filter(([pid,d])=>d.idle&&Date.now()-d.since<3*3600e3&&store.profiles.some(p=>p.id===pid));
+const idleNow=()=>Object.entries(presence).filter(([pid,d])=>d.idle&&Date.now()-d.since<3*3600e3&&Date.now()-d.at<PRESENCE_STALE&&store.profiles.some(p=>p.id===pid));
+// état de chaque stagiaire en stage aujourd'hui : actif / inactif depuis… / hors ligne (appli fermée, PC éteint)
+function teamStatus(){
+  const t=today();
+  return store.profiles.filter(pr=>t>=pr.start&&t<=pr.end).sort((a,b)=>a.first.localeCompare(b.first,'fr')).map(pr=>{
+    const d=presence[pr.id], name=pr.first.toUpperCase();
+    if(!d||Date.now()-d.at>PRESENCE_STALE)return {name,state:'off',txt:'hors ligne'};
+    if(d.idle)return {name,state:'idle',txt:'inactif depuis '+sinceTxt(d)};
+    return {name,state:'on',txt:'actif'};
+  });
+}
 function onPresence(pid,d){
   if(!d)return; presence[pid]=d;
   const pr=store.profiles.find(p=>p.id===pid);
@@ -2530,7 +2545,8 @@ function pushWidget(){
     W.widgetEnable(true);
     W.widgetState({mode:'tutor',first:'Espace tuteur',img:'assets/icons/icon-192.png',title:'Suivi Stagiaires',
       tasks:tasks.map(x=>({id:x.id,title:x.title,done:!!x.done,prio:x.prio})),
-      idle:idleNow().map(([pid,d])=>{const pr=store.profiles.find(p=>p.id===pid);return `${pr.first} · inactif depuis ${sinceTxt(d)}`})});
+      idle:idleNow().map(([pid,d])=>{const pr=store.profiles.find(p=>p.id===pid);return `${pr.first} · inactif depuis ${sinceTxt(d)}`}),
+      team:teamStatus()});
     return;
   }
   if(view!=='app'||tutor||!profile||!state.player?.species){W.widgetEnable(false);return}
