@@ -476,6 +476,11 @@ details summary{cursor:pointer;font-weight:600}
 .acard .kv b{display:block;font-family:var(--fd);font-weight:700;font-size:32px;line-height:1;color:var(--ink)}
 .acard .kv .bad b{color:var(--brick)}
 .acard .name{font-family:var(--fd);font-weight:700;font-size:34px;text-transform:uppercase;color:var(--brick);line-height:.95}
+/* poste tuteur : alertes d'inactivité */
+.tpc{margin-bottom:30px;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
+.tpc input{width:22px;height:22px;accent-color:var(--brick);flex:none;margin:2px 0 0}
+.tidle{display:flex;flex-wrap:wrap;gap:8px}
+.bav img[src*="icons/"]{border-radius:50%;border:4px solid var(--paper)}
 
 @media print{
   #app,#home,#toasts,#dlg,.noprint{display:none!important}
@@ -562,6 +567,9 @@ const rot=i=>`--r:${[-.6,.4,-.3,.5,-.4,.2][i%6]}deg`;   // petite inclinaison «
 // store = tous les profils (+ code tuteur) ; state = données du profil ouvert ; tutor = mode tuteur actif
 let store={profiles:[]};
 try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.profiles))store=s}catch(e){}
+// « Ma semaine » du tuteur : ses propres tâches, synchronisées sous le profil technique ME_ID (jamais listé comme stagiaire)
+const ME_ID='_tuteur';
+store.tutorData=store.tutorData||{tasks:[],projects:[]};
 let state={tasks:[],projects:[]}, profile=null, tutor=false, view='home';
 let syncHook=null;   // branché par le module de synchronisation : chaque enregistrement part aussi en ligne
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){notify("Impossible d'enregistrer : espace de stockage du navigateur indisponible.")}if(syncHook)syncHook()};
@@ -659,6 +667,7 @@ const Sync=(()=>{
       for(const t of data?.tasks||[])m['task:'+t.id]={profile_id:pr.id,kind:'task',doc:t};
       for(const p of data?.projects||[])m['project:'+p.id]={profile_id:pr.id,kind:'project',doc:p};
     }
+    for(const t of store.tutorData?.tasks||[])m['task:'+t.id]={profile_id:ME_ID,kind:'task',doc:t};
     return m;
   }
   const replaceKeep=(target,src,keepKeys=[])=>{
@@ -667,6 +676,12 @@ const Sync=(()=>{
   };
   function applyRow(r){
     const oid=r.id.slice(r.id.indexOf(':')+1);
+    if(r.profile_id===ME_ID){   // tâches du tuteur
+      if(r.kind!=='task')return;
+      const arr=store.tutorData.tasks, i=arr.findIndex(x=>x.id===oid);
+      if(r.deleted){if(i>=0)arr.splice(i,1)} else if(i>=0)replaceKeep(arr[i],r.doc); else arr.push(r.doc);
+      return;
+    }
     let pr=store.profiles.find(x=>x.id===r.profile_id);
     if(r.kind==='profile'){
       if(r.deleted){store.profiles=store.profiles.filter(x=>x.id!==r.profile_id);if(profile?.id===r.profile_id)setTimeout(logout);return}
@@ -703,6 +718,7 @@ const Sync=(()=>{
   }
   function applySettings(rows){
     for(const r of rows){
+      if(r.id.startsWith('presence:')){onPresence(r.id.slice(9),r.doc);continue}
       if(r.id==='tutor'&&meta.tutorSent===store.tutorPin&&r.doc?.pin&&r.doc.pin!==store.tutorPin){
         store.tutorPin=meta.tutorSent=r.doc.pin; keep(); try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){}
       }
@@ -822,6 +838,7 @@ const Sync=(()=>{
     if(view==='app'&&!dlg.open){renderHUD();render()}
     else if(view==='admin'&&!dlg.open){renderChrome();render()}
     else if(view==='home'&&home.querySelector('.profiles'))renderHome('login');
+    pushWidget();
   }
   function schedule(){if(!sb)return;clearTimeout(timer);timer=setTimeout(flush,700)}
   async function flush(){
@@ -845,7 +862,9 @@ const Sync=(()=>{
     addEventListener('online',()=>{pull().then(flush).catch(()=>{})});
     addEventListener('offline',()=>setStatus('hors ligne'));
   }
-  return {start,schedule,queueFile,blobOf,cachedBlob:f=>f.blob||(f.drive?driveCache.get(window.desktop?.files?f.rel:'pv:'+f.id):null),onStatus:f=>{listeners.push(f);f(status)},get enabled(){return !!sb}};
+  // présence d'un stagiaire (inactif / de retour) : écrite directement, hors file d'attente, pour arriver en quelques secondes
+  async function setPresence(pid,doc){if(sb)try{await sb.from('settings').upsert({id:'presence:'+pid,doc})}catch(e){}}
+  return {start,schedule,queueFile,blobOf,setPresence,cachedBlob:f=>f.blob||(f.drive?driveCache.get(window.desktop?.files?f.rel:'pv:'+f.id):null),onStatus:f=>{listeners.push(f);f(status)},get enabled(){return !!sb}};
 })();
 const size=n=>n>1e6?(n/1e6).toFixed(1)+' Mo':Math.max(1,Math.round(n/1e3))+' Ko';
 const fileIcon=n=>{const e=(n.split('.').pop()||'').toLowerCase();return {pdf:'📕',ai:'🎨',eps:'🎨',svg:'🎨',psd:'🖼️',indd:'📰',zip:'🗜️',rar:'🗜️',mp4:'🎬',mov:'🎬',doc:'📝',docx:'📝',ppt:'📊',pptx:'📊',xls:'📊',xlsx:'📊'}[e]||'📄'};
@@ -1012,6 +1031,7 @@ function grant(xp,why){
 }
 function completeTask(t,on){
   t.done=on; t.doneAt=on?Date.now():null;
+  if(view==='admin'||!state.player){save();return}   // tâches du tuteur : pas d'XP
   const p=state.player; let bonus=0;
   if(on&&!t.rewarded){
     t.rewarded=true; p.tasks++; if(t.project)p.steps++;   // compteur du trophée « Méthodique »
@@ -1311,7 +1331,8 @@ function renderChrome(){
 }
 function renderTabs(){
   let h='';
-  if(view==='admin')h=tabBtn('dash','jaune on','','Tableau de bord')+`<span class="sp"></span>`+tabBtn('logout','creme','data-t="logout"','Quitter');
+  if(view==='admin')h=tabBtn('dash',`jaune ${ui.atab!=='week'?'on':''}`,'data-atab="dash"','Tableau de bord')+tabBtn('week',`kraft ${ui.atab==='week'?'on':''}`,'data-atab="week"','Ma semaine')
+    +`<span class="sp"></span>`+tabBtn('logout','creme','data-t="logout"','Quitter');
   else if(view==='app'){
     // pastille : projets avec corrections demandées ou commentaires du tuteur non traités
     const fix=state.projects.filter(p=>p.status!=='done'&&(p.fix||fileCounts[p.id]?.comments)).length;
@@ -1319,12 +1340,12 @@ function renderTabs(){
       +`<span class="sp"></span>`+(tutor?tabBtn('dash','jaune','data-t="dash"','Tableau de bord'):tabBtn('logout','jaune','data-t="logout"','Déconnexion'));
   }
   $('#tabs').innerHTML=h;
-  $('#folder').className=view==='admin'?'f-jaune':'f-'+(TABS[ui.tab]||TABS.week)[1];
+  $('#folder').className=view==='admin'?(ui.atab==='week'?'f-kraft':'f-jaune'):'f-'+(TABS[ui.tab]||TABS.week)[1];
 }
 
 function render(){
   pushWidget();
-  if(view==='admin'){renderTabs();return renderAdmin()}
+  if(view==='admin'){renderTabs();return ui.atab==='week'?renderWeek():renderAdmin()}
   if(view!=='app')return;
   renderTabs();
   if(ui.tab==='week')renderWeek();
@@ -1341,13 +1362,13 @@ function stageHTML(){
 }
 
 function renderWeek(){
-  const t=today(), ws=ui.weekStart, we=addDays(ws,4);
+  const t=today(), ws=ui.weekStart, we=addDays(ws,4), me=view==='admin';   // me : « Ma semaine » du tuteur
   let h=`<div class="weekbar">
     <button class="btn" data-a="prev">←</button>
     <h2 class="title">Semaine du ${fmt(ws)} au ${fmt(we)}</h2>
     <button class="btn" data-a="next">→</button>
     <button class="btn" data-a="thisweek">Aujourd'hui</button>
-    ${stageHTML()}
+    ${me?'':stageHTML()}
   </div>`;
   // téléphone : un jour à la fois, choisi avec les pastilles L M M J V
   const wdays=[0,1,2,3,4].map(i=>addDays(ws,i));
@@ -1365,15 +1386,15 @@ function renderWeek(){
       <div class="dayhead"><h3 class="title">${DAYS[i]}</h3><span class="hand">${d===t?'aujourd\'hui !':fmt(d)}</span></div>
       <div class="prog"><i style="width:${tasks.length?nd/tasks.length*100:0}%"></i></div>
       ${flags.map(p=>`<span class="chip flag" data-a="openproj" data-pid="${p.id}" style="cursor:pointer">🚩 Deadline : ${esc(p.name)}</span>`).join('')}
-      ${d===profile.end?'<span class="chip grad">🎓 Dernier jour de stage</span>':''}
+      ${d===profile?.end?'<span class="chip grad">🎓 Dernier jour de stage</span>':''}
       ${tasks.map(taskHTML).join('')||'<div class="empty">Rien de prévu</div>'}
       <form class="add" data-date="${d}">
         <input type="text" placeholder="+ ajouter une tâche" required>
-        <select title="Projet">${projOptions('')}</select>
+        ${me?'':`<select title="Projet">${projOptions('')}</select>`}
       </form>
     </section>`;
   }
-  main.innerHTML=h+'</div>'+calendarHTML()+'<p class="tip">Astuce : glisse une tâche d\'un jour à l\'autre pour la déplacer · clique sur ⚑ pour changer sa priorité.</p>';
+  main.innerHTML=h+'</div>'+(me?'':calendarHTML())+'<p class="tip">Astuce : glisse une tâche d\'un jour à l\'autre pour la déplacer · clique sur ⚑ pour changer sa priorité.</p>';
 }
 
 /* calendrier mensuel : jours de deadline en couleur (rouge = en retard/aujourd'hui, jaune = à venir, vert = terminé) */
@@ -1595,7 +1616,7 @@ function openTask(id){
     <div class="cols">
       <label>Jour<input type="date" name="date" value="${x.date}" required></label>
       <label>Priorité<select name="prio">${[['high','🔴 Haute'],['','⚪ Normale'],['low','🔵 Basse']].map(([v,l])=>`<option value="${v}" ${(x.prio||'')===v?'selected':''}>${l}</option>`).join('')}</select></label>
-      <label>Projet<select name="project">${projOptions(x.project)}</select></label>
+      ${view==='admin'?'':`<label>Projet<select name="project">${projOptions(x.project)}</select></label>`}
     </div>
     <div class="row between">
       <button type="button" class="btn danger" data-a="deltask">Supprimer</button>
@@ -1606,7 +1627,8 @@ function openTask(id){
     x.title=f.get('title').trim();
     if(f.get('date')!==x.date){x.date=f.get('date');x.from=null}
     x.prio=f.get('prio')||undefined;
-    x.project=f.get('project')||null; save(); dlg.close();};
+    if(view!=='admin')x.project=f.get('project')||null;
+    save(); dlg.close();};
   dlg.querySelector('[data-a=deltask]').onclick=async()=>{if(await ask('Supprimer cette tâche ?')){state.tasks=state.tasks.filter(t=>t!==x);save();dlg.close()}};
 }
 
@@ -1777,6 +1799,11 @@ function renderAdmin(){
     pend.push({pr,p,sent:[...(p.reviews||[])].reverse().find(r=>r.type==='sent')?.date||today()});
   pend.sort((a,b)=>a.sent<b.sent?-1:1);
   let h=`<div class="weekbar"><h2 class="title" style="font-size:44px">Tableau de bord</h2><button class="btn primary" data-a="assign" style="margin-left:auto">+ Attribuer un projet</button></div>`;
+  // alertes d'inactivité reçues sur ce poste (réglage propre à l'ordinateur)
+  const idl=idleNow();
+  h+=`<div class="note creme tpc"><label class="row" style="flex-wrap:nowrap;cursor:pointer"><input type="checkbox" data-a="tutorpc" ${isTutorPC()?'checked':''}>
+      <span><b>Ce poste est celui du tuteur</b><br><span class="hint">Tu es prévenue ici (son, notification et petit ours en bas à droite, même appli fermée) quand un stagiaire reste inactif plus de ${IDLE_MIN} min.</span></span></label>
+    ${idl.length?`<div class="tidle">${idl.map(([pid,d])=>{const pr=store.profiles.find(p=>p.id===pid);return `<span class="badge late">😴 ${esc(pr.first)} inactif depuis ${sinceTxt(d)}</span>`}).join('')}</div>`:''}</div>`;
   h+=`<div class="lined panel"><span class="tape"></span><h3 class="title">📥 Projets à valider (${pend.length})</h3>${pend.length?pend.map(x=>`<div class="dli" data-a="openfor" data-pr="${x.pr.id}" data-pid="${x.p.id}" style="border-left-color:var(--tut)">
       <span class="n">${esc(x.pr.first)} · ${x.p.client?esc(x.p.client)+' › ':''}${esc(x.p.name)} <span class="badge review">À valider</span></span><small>envoyé le ${fmt(x.sent)}</small></div>`).join('')
     :'<div class="empty" style="text-align:left">Rien à valider pour le moment.</div>'}</div>`;
@@ -1802,7 +1829,8 @@ function renderAdmin(){
       <div class="hint">🗂️ Rangement : <b data-score="${pr.id}">…</b></div>
       <div class="row hint">👀 Alerte d'inactivité :
         <button class="btn sm ${idleOn(pr)?'':'danger'}" data-a="toggleidle" data-pr="${pr.id}" title="Cliquer pour ${idleOn(pr)?'désactiver':'activer'}">${idleOn(pr)?'Activée':'Désactivée'}</button>
-        ${idleOn(pr)&&pr.idleStatus?`<small>${IDLE_STATUS[pr.idleStatus]}</small>`:''}</div>
+        ${idleOn(pr)&&pr.idleStatus?`<small>${IDLE_STATUS[pr.idleStatus]}</small>`:''}
+        ${presence[pr.id]?.idle&&idl.some(([pid])=>pid===pr.id)?`<span class="badge late">😴 inactif depuis ${sinceTxt(presence[pr.id])}</span>`:''}</div>
       <div class="row"><button class="btn primary sm" data-a="openfor" data-pr="${pr.id}">Ouvrir l'espace</button>
         <button class="btn sm" data-a="resetpin" data-pr="${pr.id}" title="Le stagiaire choisira un nouveau code à sa prochaine connexion">↺ Code</button>
         <button class="btn sm danger" data-a="delprof" data-pr="${pr.id}">Supprimer</button></div>
@@ -1868,6 +1896,7 @@ function openSpace(id,asTutor){
   if(!tutor&&!state.player.species)chooseSpecies();   // profils créés avant l'arrivée des compagnons
   setTimeout(checkReminders,1500);                    // rappel du compagnon si on arrive pile dans le créneau
   startIdleWatch();                                   // alerte d'inactivité (si le stagiaire l'a activée)
+  if(!tutor&&!PHONE){presenceIdle=true;reportPresence(false)}   // arrivée dans l'espace = actif (efface un vieil état « inactif »)
 }
 // cartes de choix du compagnon (forme 01 de chaque personnage)
 const startersHTML=(sel)=>`<div class="starters">${Object.entries(SPECIES).map(([k,S])=>`<label class="starter">
@@ -1885,7 +1914,8 @@ function chooseSpecies(){
 }
 function openAdmin(){
   stopIdleWatch();
-  profile=null; state={tasks:[],projects:[]}; tutor=true; view='admin';
+  profile=null; state=store.tutorData; tutor=true; view='admin';   // state = « Ma semaine » du tuteur
+  ui.atab=ui.atab||'dash'; ui.weekStart=mondayOf(today()); rollover(state);
   ss.set('suivi-current',null); ss.set('suivi-tutor','1');
   renderChrome(); render(); pushWidget();
 }
@@ -1907,6 +1937,7 @@ $('#tabs').onclick=e=>{
   const b=e.target.closest('button'); if(!b)return;
   if(b.dataset.t)return toolAction(b.dataset.t);
   if(b.dataset.tab){ui.tab=b.dataset.tab;render()}
+  if(b.dataset.atab){ui.atab=b.dataset.atab;render()}
 };
 
 /* ---------- page d'accueil ---------- */
@@ -2110,6 +2141,12 @@ main.addEventListener('click',async e=>{
   else if(a==='driveroot'){e.preventDefault();chooseDriveRoot()}
   else if(a==='revealdir'){const p=state.projects.find(x=>x.id===ui.fileProject);if(p)driveFiles()?.reveal(driveDir(p))}
   else if(a==='notif')enableNotifications();
+  else if(a==='tutorpc'){
+    const on=el.checked; try{localStorage.setItem(POSTE_KEY,on?'1':'0')}catch(e){}
+    if(on&&'Notification' in window&&Notification.permission==='default')Notification.requestPermission().catch(()=>{});
+    if(on)for(const [pid,d] of idleNow())alerted[pid]=d.since;   // pas d'alerte rétroactive au moment de cocher
+    toast(on?'🔔 Ce poste recevra les alertes d\'inactivité':'🔕 Plus d\'alertes d\'inactivité sur ce poste'); pushWidget();
+  }
   else if(a==='toggleidle'){const pr=store.profiles.find(x=>x.id===el.dataset.pr);pr.idleAlert=!idleOn(pr);save();render();
     toast(`👀 Alerte d'inactivité ${pr.idleAlert?'activée':'désactivée'} pour ${pr.first}`)}
   else if(a==='openfolder'){e.stopPropagation();goFolder(el.dataset.pid,el.dataset.folder)}
@@ -2133,7 +2170,7 @@ main.addEventListener('change',e=>{
 main.addEventListener('submit',e=>{
   e.preventDefault(); const f=e.target; if(!f.classList.contains('add'))return;
   const title=f.querySelector('input').value.trim(); if(!title)return;
-  state.tasks.push({id:uid(),title,date:f.dataset.date,project:f.querySelector('select').value||null,done:false,created:Date.now(),byTutor:tutor||undefined});
+  state.tasks.push({id:uid(),title,date:f.dataset.date,project:f.querySelector('select')?.value||null,done:false,created:Date.now(),byTutor:view==='app'&&tutor||undefined});
   save(); render();
   main.querySelector(`form.add[data-date="${f.dataset.date}"] input`)?.focus();
 });
@@ -2278,7 +2315,8 @@ async function startIdleWatch(){
     const det=new IdleDetector(); idleCtrl=new AbortController();
     det.addEventListener('change',()=>{
       // écran verrouillé = le stagiaire s'est absenté volontairement : pas d'alerte
-      if(det.userState==='idle'&&det.screenState==='unlocked'&&inWorkHours())idleAlert();
+      if(det.userState==='idle'&&det.screenState==='unlocked'&&inWorkHours()){idleAlert();reportPresence(true,IDLE_MIN*60)}
+      else if(det.userState==='active')reportPresence(false);
     });
     await det.start({threshold:IDLE_MIN*60000,signal:idleCtrl.signal});
     setIdleStatus('ok');
@@ -2331,14 +2369,59 @@ function idleAlert(){
   window.desktop?.attention();   // appli installée : la fenêtre repasse au premier plan
 }
 
+/* ---------- le tuteur est prévenu de l'inactivité (même si le stagiaire a coupé le son) ---------- */
+// côté stagiaire : « inactif depuis… » puis « de retour », envoyés via la synchro (table settings, id presence:<profil>)
+let presenceIdle=false;
+function reportPresence(idle,seconds=0){
+  if(!profile||tutor||view!=='app'||presenceIdle===idle)return;
+  presenceIdle=idle;
+  Sync.setPresence(profile.id,{idle,since:idle?Date.now()-seconds*1000:null,at:Date.now(),first:profile.first});
+}
+// côté tuteur : seulement sur le poste coché « Ce poste est celui du tuteur » (réglage local, pas synchronisé)
+const POSTE_KEY='suivi-poste-tuteur';
+const isTutorPC=()=>{try{return localStorage.getItem(POSTE_KEY)==='1'}catch(e){return false}};
+const presence={}, alerted={};   // dernier état connu par stagiaire · début d'inactivité déjà signalé
+const idleNow=()=>Object.entries(presence).filter(([pid,d])=>d.idle&&Date.now()-d.since<3*3600e3&&store.profiles.some(p=>p.id===pid));
+function onPresence(pid,d){
+  if(!d)return; presence[pid]=d;
+  const pr=store.profiles.find(p=>p.id===pid);
+  if(isTutorPC()&&pr){
+    if(d.idle&&alerted[pid]!==d.since&&Date.now()-d.since<3*3600e3){alerted[pid]=d.since;tutorIdleAlert(pr,d)}
+    else if(!d.idle&&alerted[pid]){delete alerted[pid];tutorBackAlert(pr)}
+  }
+  if(view==='admin'&&ui.atab!=='week'&&!dlg.open)render(); else pushWidget();
+}
+const sinceTxt=d=>{const m=Math.max(IDLE_MIN,Math.round((Date.now()-d.since)/60000));return m<60?`${m} min`:`${Math.floor(m/60)} h ${String(m%60).padStart(2,'0')}`};
+function tutorBubble(html,cls=''){
+  const b=document.createElement('div'); b.className='buddy '+cls;
+  b.innerHTML=`<div class="bav"><img src="assets/icons/icon-192.png" alt=""></div><div class="btxt">${html}<div class="row"><button class="btn sm primary" data-ok>Compris</button></div></div>`;
+  b.querySelector('[data-ok]').onclick=()=>{b.classList.add('out');setTimeout(()=>b.remove(),300)};
+  $('#buddies').replaceChildren(b);
+  return b;
+}
+function tutorIdleAlert(pr,d){
+  const txt=`${pr.first} ${pr.last} est inactif depuis ${sinceTxt(d)}.`;
+  playChime();
+  tutorBubble(`<div class="bwho">👀 Alerte d'inactivité</div><p>${esc(txt)}</p>`);
+  if(hiddenDesktop())window.desktop.widgetSay({who:'Alerte d\'inactivité',text:txt});
+  if('Notification' in window&&Notification.permission==='granted'){
+    try{new Notification('Alerte d\'inactivité',{body:txt,icon:'assets/icons/icon-192.png',tag:'idle-'+pr.id,requireInteraction:true})}catch(e){}
+  }
+}
+function tutorBackAlert(pr){
+  const txt=`${pr.first} est de retour.`;
+  const cur=$('#buddies .buddy'); if(cur)cur.remove();
+  if(hiddenDesktop())window.desktop.widgetSay({short:true,text:'✓ '+txt}); else toast('✓ '+txt);
+}
+
 /* ---------- appli installée (coquille Windows / Mac) ---------- */
 if(window.desktop){
   // inactivité de tout l'ordinateur, envoyée toutes les 15 s ; l'alerte se réarme dès que le stagiaire bouge
   let idleArmed=true;
   window.desktop.onIdle(({seconds,locked})=>{
-    if(seconds<60){idleArmed=true;return}
+    if(seconds<60){idleArmed=true;reportPresence(false);return}
     if(!idleArmed||locked||tutor||view!=='app'||!idleOn(profile)||!inWorkHours())return;
-    if(seconds>=IDLE_MIN*60){idleArmed=false;idleAlert()}
+    if(seconds>=IDLE_MIN*60){idleArmed=false;idleAlert();reportPresence(true,seconds)}
   });
   // quitter complètement l'appli demande le code tuteur (fermer la fenêtre la range seulement près de l'horloge)
   window.desktop.onQuitRequest(async()=>{
@@ -2354,6 +2437,16 @@ if(window.desktop){
 // compagnon flottant (appli installée) : visible quand la grande fenêtre est fermée ; il reçoit l'état et renvoie ses actions
 function pushWidget(){
   const W=window.desktop; if(!W?.widgetState)return;
+  // poste tuteur (hors espace d'un stagiaire) : l'ours de l'appli, les tâches du tuteur et les stagiaires inactifs
+  if(isTutorPC()&&!(view==='app'&&!tutor)){
+    const t=today(), rank={high:0,undefined:1,low:2};
+    const tasks=store.tutorData.tasks.filter(x=>x.date===t).sort((a,b)=>a.done-b.done||rank[a.prio]-rank[b.prio]||a.created-b.created);
+    W.widgetEnable(true);
+    W.widgetState({mode:'tutor',first:'Espace tuteur',img:'assets/icons/icon-192.png',title:'Suivi Stagiaires',
+      tasks:tasks.map(x=>({id:x.id,title:x.title,done:!!x.done,prio:x.prio})),
+      idle:idleNow().map(([pid,d])=>{const pr=store.profiles.find(p=>p.id===pid);return `${pr.first} · inactif depuis ${sinceTxt(d)}`})});
+    return;
+  }
   if(view!=='app'||tutor||!profile||!state.player?.species){W.widgetEnable(false);return}
   const p=state.player, L=levelOf(p.xp), c=charOf(L), lo=need(L), hi=need(L+1), t=today(), rank={high:0,undefined:1,low:2};
   W.widgetEnable(true);
@@ -2368,7 +2461,11 @@ window.desktop?.onAppVisible?.(v=>{appHidden=!v;if(v)visWaiters.splice(0).forEac
 const hiddenDesktop=()=>!!window.desktop?.widgetSay&&(appHidden||document.visibilityState==='hidden');
 if(window.desktop?.onWidgetAction){
   window.desktop.onWidgetAction(a=>{
-    if(a.type==='toggle'){const x=state.tasks.find(t=>t.id===a.id);if(x){completeTask(x,!x.done);render()}}
+    if(a.type==='toggle'){
+      const mine=store.tutorData.tasks.find(t=>t.id===a.id);   // tâche du tuteur (poste tuteur) : pas d'XP
+      if(mine){mine.done=!mine.done;mine.doneAt=mine.done?Date.now():null;save();render();pushWidget();return}
+      const x=state.tasks.find(t=>t.id===a.id);if(x){completeTask(x,!x.done);render()}
+    }
   });
 }
 function askPin(title,sub){
@@ -2386,9 +2483,10 @@ function askPin(title,sub){
 /* ---------- démarrage ---------- */
 let lastDay=today();
 setInterval(checkReminders,30000);
-setInterval(()=>{ // passage à minuit → actualise la todo-list
-  if(today()!==lastDay&&!dlg.open){lastDay=today();rollover();render();renderHUD()}
+setInterval(()=>{ // passage à minuit → actualise la todo-list (et celle du tuteur)
+  if(today()!==lastDay&&!dlg.open){lastDay=today();rollover();rollover(store.tutorData);render();renderHUD()}
 },30000);
+rollover(store.tutorData);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!dlg.open&&view!=='home'){lastDay=today();rollover();render();renderHUD();checkReminders()}});
 {
   const sid=ss.get('suivi-current'), st=ss.get('suivi-tutor')==='1';
