@@ -427,6 +427,17 @@ details summary{cursor:pointer;font-weight:600}
   background:repeating-conic-gradient(#efe6d6 0 25%,#fbf6ec 0 50%) 0 0/20px 20px;box-shadow:inset 0 0 0 1px var(--line)}
 .pv img{max-width:100%;max-height:70vh;object-fit:contain;display:block}
 .pv iframe{width:100%;height:70vh;border:0;background:#fff}
+/* aperçu + corrections côte à côte */
+#vdlg:has(.pvdlg){width:min(1240px,96vw)}
+.pvwrap{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:start}
+.pvcoms{display:flex;flex-direction:column;gap:8px;max-height:70vh;overflow:auto}
+.pvcoms .fcom.done{opacity:.6} .pvcoms .fcom.done span{text-decoration:line-through}
+.pvadd{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.pvadd textarea{min-height:90px;padding:10px 12px;border:1.5px solid var(--line);border-radius:7px;background:#fffdf8;font-size:16px;resize:vertical}
+@media (max-width:860px){.pvwrap{grid-template-columns:1fr}.pvcoms{max-height:none}}
+/* carte projet : fichiers à corriger */
+.pfix{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:13.5px;font-weight:600;color:var(--brick)}
+.pfix .fchip{border-color:var(--brick);font-weight:600;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fline [data-fa=view],.file [data-fa=view]{cursor:zoom-in}
 .fline .n[data-fa=view]:hover,.file .n[data-fa=view]:hover{text-decoration:underline}
 .pfgrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
@@ -800,6 +811,7 @@ const Sync=(()=>{
       const local=await rawGet(r.id).catch(()=>null);
       if(r.deleted){if(local){await rawDel(r.id);changed=true}continue}
       if(local&&canon(strip(local))===canon(r.meta))continue;
+      newCorrections(local,r.meta);
       await rawPut({...r.meta,blob:local?.blob||null,uploaded:true,path:r.path}); changed=true;
     }
     keep();
@@ -872,8 +884,8 @@ const fileCounts={};
 // nombre de fichiers par projet et par dossier : fileCounts[projet] = {total, recherches, sources, …}
 async function refreshCounts(){
   const all=await allFiles(); for(const k in fileCounts)delete fileCounts[k];
-  all.forEach(f=>{const c=fileCounts[f.projectId]=fileCounts[f.projectId]||{total:0,comments:0};const k=f.folder||'livrables';c.total++;c[k]=(c[k]||0)+1;
-    c.comments+=(f.comments||[]).filter(x=>!x.resolved).length});
+  all.forEach(f=>{const c=fileCounts[f.projectId]=fileCounts[f.projectId]||{total:0,comments:0,fix:[]};const k=f.folder||'livrables';c.total++;c[k]=(c[k]||0)+1;
+    const n=(f.comments||[]).filter(x=>!x.resolved).length; c.comments+=n; if(n)c.fix.push({id:f.id,name:f.name,n})});   // fix : fichiers à corriger
 }
 let objURLs=[];
 const objURL=b=>{const u=URL.createObjectURL(b);objURLs.push(u);return u};
@@ -1251,9 +1263,13 @@ async function renameFile(fid,p){
   f.name=n; await putFile(f); await rewardFile(f,p);
   await checkFolderDone(p); save();
 }
-// aperçu d'un fichier sans le télécharger (images, PDF, et .ai enregistrés « compatibles PDF »)
+// aperçu d'un fichier (images, PDF, .ai « compatibles PDF ») + ses corrections (le tuteur les écrit ici, le stagiaire les coche « corrigé ») ;
+// ← → passent au fichier suivant du projet (pratique pour une série de posts)
+const FOLDER_ORDER=Object.fromEntries(FOLDERS.map(([k],i)=>[k,i]));
 async function openPreview(f,p,after){
   const d=$('#vdlg'), e=splitExt(f.name)[1].toLowerCase();
+  const list=(await filesOf(p.id)).sort((a,b)=>FOLDER_ORDER[folderOf(a)]-FOLDER_ORDER[folderOf(b)]||(a.v||0)-(b.v||0)||a.name.localeCompare(b.name,'fr'));
+  const idx=list.findIndex(x=>x.id===f.id), go=k=>{const n=list[idx+k];if(n)openPreview(n,p,after)};
   const W=f.drive&&driveFiles(), pvOnly=f.drive&&!W;   // pvOnly : téléphone / navigateur → aperçu allégé (JPEG)
   const img=pvOnly||/^image\//.test(f.type)||IMG_EXT.includes(e), pdf=!pvOnly&&(f.type==='application/pdf'||e==='pdf'||e==='ai');
   const blob=await Sync.blobOf(f);   // fichier déposé depuis un autre poste : téléchargé à la première ouverture
@@ -1261,22 +1277,56 @@ async function openPreview(f,p,after){
     :"Pas d'aperçu pour ce fichier : il est rangé dans le Google Drive de l'agence, ouvre-le depuis l'appli installée ou directement dans le Drive.")
     :"Ce fichier n'est pas encore disponible sur ce poste (pas de connexion ?). Réessaie dans un instant.");
   const url=URL.createObjectURL(pdf?new Blob([blob],{type:'application/pdf'}):blob);
-  d.innerHTML=`<div class="dlg">
-    <div class="row between" style="flex-wrap:nowrap;align-items:flex-start"><h2 style="margin:0;font-size:22px;font-weight:600;word-break:break-all">${esc(f.name)}</h2><button class="x" data-x title="Fermer">×</button></div>
+  if(d.dataset.url)URL.revokeObjectURL(d.dataset.url); d.dataset.url=url;
+  d.innerHTML=`<div class="dlg pvdlg">
+    <div class="row between" style="flex-wrap:nowrap;align-items:flex-start">
+      <div style="min-width:0"><div class="kicker">${esc(FOLDER_LABEL[folderOf(f)])}${list.length>1?` · ${idx+1}/${list.length}`:''}</div>
+        <h2 style="margin:2px 0 0;font-size:22px;font-weight:600;word-break:break-all">${esc(f.name)}</h2></div>
+      <div class="row" style="flex-wrap:nowrap">${list.length>1?`<button class="btn sm" data-go="-1" ${idx>0?'':'disabled'} title="Fichier précédent (←)">←</button><button class="btn sm" data-go="1" ${idx<list.length-1?'':'disabled'} title="Fichier suivant (→)">→</button>`:''}
+        <button class="x" data-x title="Fermer">×</button></div></div>
     <div class="fstat">${nameTag(f,p)}</div>
-    <div class="pv">${img?`<img src="${url}" alt="">`:pdf?`<iframe src="${url}" title="Aperçu"></iframe>`
+    <div class="pvwrap"><div class="pv">${img?`<img src="${url}" alt="">`:pdf?`<iframe src="${url}" title="Aperçu"></iframe>`
       :`<div class="empty">Pas d'aperçu possible pour ce format (.${esc(e||'?')}). ${W?'Clique sur « Ouvrir » pour le lancer dans son logiciel.':'Télécharge le fichier pour l\'ouvrir.'}</div>`}</div>
+      <aside class="pvcoms" id="pvcoms"></aside></div>
     ${pvOnly?`<div class="hint">Aperçu allégé${/pdf|ai/.test(e)?' (1re page)':''} · l'original est dans le Google Drive de l'agence.</div>`
       :e==='ai'?'<div class="hint">L\'aperçu d\'un .ai ne fonctionne que s\'il a été enregistré avec l\'option « Créer un fichier compatible PDF ».</div>':''}
     <div class="row between">${pvOnly?'<span></span>':'<button class="btn" data-ren>✏️ Renommer</button>'}
       <div class="row">${pvOnly?'':W?'<button class="btn" data-dv="reveal">📂 Voir dans le dossier</button><button class="btn" data-dv="open">↗ Ouvrir</button>'
         :`<a class="btn" href="${url}" download="${esc(f.name)}" style="text-decoration:none">⬇ Télécharger</a>`}<button class="btn primary" data-x>Fermer</button></div></div></div>`;
-  d.showModal();
-  d.onclose=()=>URL.revokeObjectURL(url);
+  if(!d.open)d.showModal();
+  d.onclose=async()=>{URL.revokeObjectURL(d.dataset.url);d.dataset.url='';await refreshCounts();after&&after()};
   d.onclick=ev=>{if(ev.target===d)d.close()};
+  // ← → : fichier précédent / suivant (aussi depuis la zone de correction tant qu'elle est vide)
+  d.onkeydown=ev=>{if(ev.target.closest('textarea,input')&&ev.target.value)return; if(ev.key==='ArrowRight')go(1); else if(ev.key==='ArrowLeft')go(-1)};
   d.querySelectorAll('[data-x]').forEach(b=>b.onclick=()=>d.close());
+  d.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(+b.dataset.go));
   const rb=d.querySelector('[data-ren]'); if(rb)rb.onclick=async()=>{d.close();await renameFile(f.id,p);after&&after()};
   d.querySelectorAll('[data-dv]').forEach(b=>b.onclick=()=>W[b.dataset.dv](f.rel));
+  // corrections : synchronisées avec la fiche et la carte projet du stagiaire
+  const box=d.querySelector('#pvcoms');
+  const drawComs=()=>{
+    const cs=f.comments||[], open=cs.filter(c=>!c.resolved).length;
+    box.innerHTML=`<div class="kicker">✏️ Corrections${cs.length?` · ${open?open+' à faire':'tout est corrigé ✓'}`:''}</div>
+      ${cs.map(c=>`<div class="fcom ${c.resolved?'done':''}" data-cid="${c.id}"><span>${esc(c.text)}<br><small>${fmt(c.date)}${c.resolved?' · corrigé ✓':''}</small></span>
+        ${!c.resolved&&!tutor?'<button class="btn sm" data-res>✓ Corrigé</button>':''}${tutor?'<button class="x" data-del title="Supprimer la correction">×</button>':''}</div>`).join('')
+        ||`<div class="hint">${tutor?'Aucune correction pour ce fichier.':'Aucune correction demandée sur ce fichier.'}</div>`}
+      ${tutor?`<form class="pvadd"><textarea placeholder="Correction à faire sur ce fichier… (Entrée pour ajouter)" required></textarea>
+        <button class="btn primary sm">Ajouter la correction</button></form>`:''}`;
+    const fm=box.querySelector('form');
+    if(fm){const ta=fm.querySelector('textarea');
+      ta.onkeydown=ev=>{if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();fm.requestSubmit()}};
+      fm.onsubmit=async ev=>{ev.preventDefault();const txt=ta.value.trim();if(!txt)return;
+        (f.comments=f.comments||[]).push({id:uid(),date:today(),text:txt,resolved:false});
+        await putFile(f); drawComs(); box.querySelector('textarea').focus(); toast('✏️ Correction envoyée à '+profile.first)};}
+  };
+  box.onclick=async ev=>{
+    const row=ev.target.closest('.fcom'); if(!row)return; const c=(f.comments||[]).find(x=>x.id===row.dataset.cid); if(!c)return;
+    if(ev.target.closest('[data-res]')){c.resolved=true;c.resolvedAt=today()}
+    else if(ev.target.closest('[data-del]'))f.comments=f.comments.filter(x=>x!==c); else return;
+    await putFile(f); drawComs();
+  };
+  drawComs();
+  if(tutor&&!PHONE)box.querySelector('textarea')?.focus({preventScroll:true});
 }
 // créer un dossier Client › Projet (crée aussi le projet, suivi ensuite dans l'onglet Projets)
 function openNewFolder(){
@@ -1472,8 +1522,10 @@ function renderProjects(){
         ${dl?`<span class="badge ${dl.late?'late':'ghost'}">🚩 ${dl.txt}</span>`:''}
         ${p.fix?'<span class="badge fix">✏️ Corrections demandées</span>':''}
         ${p.status==='review'?'<span class="badge review">⏳ Chez le tuteur</span>':''}
-        ${p.status!=='done'&&fileCounts[p.id]?.comments?`<span class="badge ghost">💬 ${fileCounts[p.id].comments} commentaire${fileCounts[p.id].comments>1?'s':''}</span>`:''}
       </div>
+      ${p.status!=='done'&&fileCounts[p.id]?.fix.length?`<div class="pfix">✏️ À corriger :${fileCounts[p.id].fix.slice(0,6).map(x=>
+        `<button class="fchip" data-a="openfile" data-pid="${p.id}" data-fid="${x.id}" title="Voir le fichier et ses corrections">${esc(x.name)}${x.n>1?` <b>×${x.n}</b>`:''}</button>`).join('')}
+        ${fileCounts[p.id].fix.length>6?`<span>+${fileCounts[p.id].fix.length-6}</span>`:''}</div>`:''}
       ${p.byTutor?'<div><span class="chip tut">👩‍🏫 Attribué par le tuteur</span></div>':''}
       ${nt.length?`<div><div class="hint">Tâches ${nd}/${nt.length}</div><div class="prog"><i style="width:${nd/nt.length*100}%"></i></div></div>`:'<div class="hint">Aucune tâche</div>'}
       <div class="pfchips">${FOLDERS.map(([k,l])=>`<button class="fchip" data-a="openfolder" data-pid="${p.id}" data-folder="${k}" title="Ouvrir le dossier ${l}">${l} <b>${fileCounts[p.id]?.[k]||0}</b></button>`).join('')}</div>
@@ -1705,17 +1757,20 @@ async function openProject(id){
         <div class="row"><button type="button" class="btn primary" data-r="ok">✅ Valider le projet</button><button type="button" class="btn" data-r="fix">✏️ Demander des corrections</button></div>
         <div class="hint">Tu peux aussi commenter chaque fichier dans l'onglet Fichiers (bouton 💬).</div></div>`;
     if(open.length)h+=`<div class="kicker">Commentaires sur les fichiers (${open.length})</div>`+open.map(({f,c})=>
-      `<div class="fcom" data-folder="${folderOf(f)}"><span><b>${esc(f.name)}</b><br>💬 ${esc(c.text)}</span><button type="button" class="btn sm" data-r="goto">Voir le fichier</button></div>`).join('');
+      `<div class="fcom" data-fid="${f.id}"><span><b>${esc(f.name)}</b><br>✏️ ${esc(c.text)}</span><button type="button" class="btn sm" data-r="goto">Voir le fichier</button></div>`).join('');
     if(hist.length)h+=`<details><summary class="hint">Historique (${hist.length})</summary>${hist.map(r=>`<div class="hint">${fmt(r.date)} · ${REVIEW_LABEL[r.type]}${r.text?' — '+esc(r.text):''}</div>`).join('')}</details>`;
     g('#p_review').innerHTML=h||'<div class="hint">Quand le projet est prêt, envoie-le au tuteur pour validation.</div>';
   };
-  g('#p_review').onclick=e=>{
+  g('#p_review').onclick=async e=>{
     const b=e.target.closest('[data-r]'); if(!b)return;
     if(isNew&&!g('#p_name').value.trim()){g('#p_name').focus();return}
     commit(); const r=b.dataset.r;
     if(r==='send')sendForReview(p);
     else if(r==='ok'||r==='fix')reviewProject(p,r==='ok',g('#r_text').value.trim());
-    else if(r==='goto')return goFolder(p.id,b.closest('.fcom').dataset.folder);
+    else if(r==='goto'){   // aperçu du fichier avec ses corrections, par-dessus la fiche projet
+      const f=(await filesOf(p.id)).find(x=>x.id===b.closest('.fcom').dataset.fid);
+      if(f)openPreview(f,p,drawReview); return;
+    }
     g('#p_status').value=p.status; drawReview();
   };
 
@@ -2150,6 +2205,8 @@ main.addEventListener('click',async e=>{
   else if(a==='toggleidle'){const pr=store.profiles.find(x=>x.id===el.dataset.pr);pr.idleAlert=!idleOn(pr);save();render();
     toast(`👀 Alerte d'inactivité ${pr.idleAlert?'activée':'désactivée'} pour ${pr.first}`)}
   else if(a==='openfolder'){e.stopPropagation();goFolder(el.dataset.pid,el.dataset.folder)}
+  else if(a==='openfile'){e.stopPropagation();const p=state.projects.find(x=>x.id===el.dataset.pid);
+    const f=p&&(await filesOf(p.id)).find(x=>x.id===el.dataset.fid); if(f)openPreview(f,p,render)}
   else if(a==='recap'){e.preventDefault();openRecap()}
   // tuteur
   else if(a==='assign')openAssign();
@@ -2367,6 +2424,23 @@ function idleAlert(){
     try{new Notification(`${c.title} : on s'y remet ?`,{body:msg,icon:c.img,tag:'idle',requireInteraction:true})}catch(e){}
   }
   window.desktop?.attention();   // appli installée : la fenêtre repasse au premier plan
+}
+
+/* ---------- le stagiaire est prévenu d'une nouvelle correction du tuteur ---------- */
+function newCorrections(old,meta){
+  if(!old||view!=='app'||tutor||!state.projects.some(p=>p.id===meta.projectId))return;   // !old : poste qui découvre le fichier, pas une nouveauté
+  const seen=new Set((old?.comments||[]).map(c=>c.id)), fresh=(meta.comments||[]).filter(c=>!c.resolved&&!seen.has(c.id));
+  if(!fresh.length)return;
+  const p=state.projects.find(x=>x.id===meta.projectId), title=`✏️ Correction sur « ${meta.name} »`, body=fresh.map(c=>c.text).join('\n');
+  const b=document.createElement('div'); b.className='buddy';
+  b.innerHTML=`<div class="bav">${charOf(levelOf(state.player.xp)).icon}</div><div class="btxt"><div class="bwho">${esc(TUTOR_NAME)} · ${esc(p.name)}</div>
+    <p><b>${esc(meta.name)}</b><br>${esc(body)}</p><div class="row"><button class="btn sm primary" data-see>Voir le fichier</button><button class="btn sm" data-ok>Plus tard</button></div></div>`;
+  const close=()=>{b.classList.add('out');setTimeout(()=>b.remove(),300)};
+  b.querySelector('[data-ok]').onclick=close;
+  b.querySelector('[data-see]').onclick=async()=>{close();const f=(await filesOf(p.id)).find(x=>x.id===meta.id);if(f)openPreview(f,p,render)};
+  $('#buddies').replaceChildren(b);
+  if(hiddenDesktop())window.desktop.widgetSay({who:title,text:body});
+  if('Notification' in window&&Notification.permission==='granted'){try{new Notification(title,{body,tag:'fix-'+meta.id})}catch(e){}}
 }
 
 /* ---------- le tuteur est prévenu de l'inactivité (même si le stagiaire a coupé le son) ---------- */
