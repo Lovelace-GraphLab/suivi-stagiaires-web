@@ -2416,13 +2416,21 @@ function tutorBackAlert(pr){
 
 /* ---------- appli installée (coquille Windows / Mac) ---------- */
 if(window.desktop){
-  // inactivité de tout l'ordinateur, envoyée toutes les 15 s ; l'alerte se réarme dès que le stagiaire bouge
-  let idleArmed=true;
-  window.desktop.onIdle(({seconds,locked})=>{
-    if(seconds<60){idleArmed=true;reportPresence(false);return}
+  // inactivité de tout l'ordinateur, relevée toutes les 15 s par la coquille (secondes depuis le dernier clic / la dernière touche).
+  // Un clic ou un petit mouvement de souris ne suffit pas : le compteur ne repart à zéro qu'après ACTIVE_NEED secondes
+  // d'utilisation continue (une action dans chaque relevé de 15 s, sans trou).
+  const TICK=15, ACTIVE_NEED=60;
+  let idleArmed=true, streak=0, confirmed=Date.now();   // confirmed : dernière activité « réelle » (soutenue)
+  window.onIdleTick=({seconds,locked},now=Date.now())=>{
+    streak=seconds<TICK?streak+1:0;
+    if(streak*TICK>=ACTIVE_NEED){confirmed=now-seconds*1000;idleArmed=true;reportPresence(false);return}
+    const eff=Math.round((now-confirmed)/1000);   // inactivité « réelle », malgré les petits clics isolés
     if(!idleArmed||locked||tutor||view!=='app'||!idleOn(profile)||!inWorkHours())return;
-    if(seconds>=IDLE_MIN*60){idleArmed=false;idleAlert();reportPresence(true,seconds)}
-  });
+    if(seconds<TICK)return;   // il est en train de s'y remettre : on lui laisse sa minute (pas d'alerte à 14h pile au retour de pause)
+    if(eff>=IDLE_MIN*60){idleArmed=false;idleAlert();reportPresence(true,eff)}
+    return eff;
+  };
+  window.desktop.onIdle(d=>window.onIdleTick(d));
   // quitter complètement l'appli demande le code tuteur (fermer la fenêtre la range seulement près de l'horloge)
   window.desktop.onQuitRequest(async()=>{
     if(!store.tutorPin)return window.desktop.quit();
