@@ -1079,9 +1079,25 @@ function grant(xp,why){
   }
   checkTrophies(); save(); renderHUD();
 }
+/* ---------- chronomètre du tuteur (dans l'ours) : temps ajouté à la tâche ----------
+   Le chrono vit dans le stockage local partagé avec l'ours ({acc, start, taskId}). Quand la tâche suivie est cochée
+   (ou sur ✓ dans l'ours), le temps s'ajoute à t.spent : il s'additionne d'une session à l'autre (corrections…). */
+const CHRONO_KEY='suivi-chrono';
+const fmtDur=ms=>{const m=Math.floor((ms||0)/60000);return m<60?`${m} min`:`${Math.floor(m/60)} h ${String(m%60).padStart(2,'0')}`};
+function chronoRecord(taskId,finished){
+  let c; try{c=JSON.parse(localStorage.getItem(CHRONO_KEY))}catch(e){}
+  if(!c||!c.taskId||(taskId&&c.taskId!==taskId))return false;
+  const t=store.tutorData.tasks.find(x=>x.id===c.taskId); if(!t)return false;
+  const ms=(c.acc||0)+(c.start?Date.now()-c.start:0);
+  try{localStorage.setItem(CHRONO_KEY,JSON.stringify({acc:0,start:null,taskId:finished?null:c.taskId}))}catch(e){}
+  if(ms<60000){pushWidget();return false}   // moins d'une minute : rien à ajouter
+  t.spent=(t.spent||0)+ms; save(); render(); pushWidget();
+  toast(`⏱ ${fmtDur(ms)} ajoutés à « ${t.title} » · total ${fmtDur(t.spent)}`);
+  return true;
+}
 function completeTask(t,on){
   t.done=on; t.doneAt=on?Date.now():null;
-  if(view==='admin'||!state.player){save();return}   // tâches du tuteur : pas d'XP
+  if(view==='admin'||!state.player){if(on&&store.tutorData.tasks.includes(t))chronoRecord(t.id,true);save();return}   // tâches du tuteur : pas d'XP
   const p=state.player; let bonus=0;
   if(on&&!t.rewarded){
     t.rewarded=true; p.tasks++; if(t.project)p.steps++;   // compteur du trophée « Méthodique »
@@ -1551,6 +1567,7 @@ function taskHTML(x){
         <button class="prio ${x.prio||''}" data-a="prio" title="Priorité : cliquer pour changer">${pl}</button>
         ${p?`<span class="chip" data-a="openproj" data-pid="${x.project}" style="cursor:pointer">📁 ${(c=>c?`<b>${esc(c)}</b> · `:'')(state.projects.find(q=>q.id===x.project)?.client)}${esc(p)}</span>`:''}
         ${x.byTutor?'<span class="chip tut">👩‍🏫 Tuteur</span>':''}
+        ${x.spent>=60000?`<span class="chip" title="Temps passé (chronomètre)">⏱ ${fmtDur(x.spent)}</span>`:''}
         ${x.from&&!x.done?`<span class="chip carry">↪ reportée du ${dayName(x.from)} ${fmt(x.from)}</span>`:''}
       </div></div></div>`;
 }
@@ -1735,7 +1752,8 @@ function openTask(id){
     <div class="cols">
       <label>Jour<input type="date" name="date" value="${x.date}" required></label>
       <label>Priorité<select name="prio">${[['high','🔴 Haute'],['','⚪ Normale'],['low','🔵 Basse']].map(([v,l])=>`<option value="${v}" ${(x.prio||'')===v?'selected':''}>${l}</option>`).join('')}</select></label>
-      ${view==='admin'?'':`<label>Projet<select name="project">${projOptions(x.project)}</select></label>`}
+      ${view==='admin'?`<label>Temps passé (min)<input type="number" name="spent" min="0" step="1" value="${Math.round((x.spent||0)/60000)}" title="Ajouté par le chronomètre de l'ours ; modifiable"></label>`
+        :`<label>Projet<select name="project">${projOptions(x.project)}</select></label>`}
     </div>
     <div class="row between">
       <button type="button" class="btn danger" data-a="deltask">Supprimer</button>
@@ -1747,6 +1765,7 @@ function openTask(id){
     if(f.get('date')!==x.date){x.date=f.get('date');x.from=null}
     x.prio=f.get('prio')||undefined;
     if(view!=='admin')x.project=f.get('project')||null;
+    else{const m=Math.max(0,Math.round(+f.get('spent')||0));if(m!==Math.round((x.spent||0)/60000))x.spent=m*60000}   // correction à la main du temps passé
     save(); dlg.close();};
   dlg.querySelector('[data-a=deltask]').onclick=async()=>{if(await ask('Supprimer cette tâche ?')){state.tasks=state.tasks.filter(t=>t!==x);save();dlg.close()}};
 }
@@ -2611,7 +2630,7 @@ function pushWidget(){
     const tasks=store.tutorData.tasks.filter(x=>x.date===t).sort((a,b)=>a.done-b.done||rank[a.prio]-rank[b.prio]||a.created-b.created);
     W.widgetEnable(true);
     W.widgetState({mode:'tutor',first:'Espace tuteur',img:'assets/icons/icon-192.png',title:'Suivi Stagiaires',
-      tasks:tasks.map(x=>({id:x.id,title:x.title,done:!!x.done,prio:x.prio})),
+      tasks:tasks.map(x=>({id:x.id,title:x.title,done:!!x.done,prio:x.prio,spent:x.spent||0})),
       idle:idleNow().map(([pid,d])=>{const pr=store.profiles.find(p=>p.id===pid);return `${pr.first} · inactif depuis ${sinceTxt(d)}`}),
       team:teamStatus()});
     return;
@@ -2641,9 +2660,10 @@ window.desktop?.onAppVisible?.(v=>{
 const hiddenDesktop=()=>!!window.desktop?.widgetSay&&(appHidden||document.visibilityState==='hidden');
 if(window.desktop?.onWidgetAction){
   window.desktop.onWidgetAction(a=>{
+    if(a.type==='chrono-save')return chronoRecord(null,false);   // ✓ dans l'ours : ajoute le temps sans terminer la tâche
     if(a.type==='toggle'){
       const mine=store.tutorData.tasks.find(t=>t.id===a.id);   // tâche du tuteur (poste tuteur) : pas d'XP
-      if(mine){mine.done=!mine.done;mine.doneAt=mine.done?Date.now():null;save();render();pushWidget();return}
+      if(mine){mine.done=!mine.done;mine.doneAt=mine.done?Date.now():null;if(mine.done)chronoRecord(mine.id,true);save();render();pushWidget();return}
       const x=state.tasks.find(t=>t.id===a.id);if(x){completeTask(x,!x.done);render()}
     }
   });
