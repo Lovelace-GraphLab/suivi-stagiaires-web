@@ -1087,7 +1087,8 @@ const fmtDur=ms=>{const m=Math.floor((ms||0)/60000);return m<60?`${m} min`:`${Ma
 function chronoRecord(taskId,finished){
   let c; try{c=JSON.parse(localStorage.getItem(CHRONO_KEY))}catch(e){}
   if(!c||!c.taskId||(taskId&&c.taskId!==taskId))return false;
-  const t=store.tutorData.tasks.find(x=>x.id===c.taskId); if(!t)return false;
+  // tâche du tuteur, ou du stagiaire connecté sur ce poste
+  const t=store.tutorData.tasks.find(x=>x.id===c.taskId)||(view==='app'&&!tutor?state.tasks.find(x=>x.id===c.taskId):null); if(!t)return false;
   const ms=(c.acc||0)+(c.start?Date.now()-c.start:0);
   try{localStorage.setItem(CHRONO_KEY,JSON.stringify({acc:0,start:null,taskId:finished?null:c.taskId}))}catch(e){}
   if(ms<60000){pushWidget();return false}   // moins d'une minute : rien à ajouter
@@ -1098,6 +1099,7 @@ function chronoRecord(taskId,finished){
 function completeTask(t,on){
   t.done=on; t.doneAt=on?Date.now():null;
   if(view==='admin'||!state.player){if(on&&store.tutorData.tasks.includes(t))chronoRecord(t.id,true);save();return}   // tâches du tuteur : pas d'XP
+  if(on&&!tutor)chronoRecord(t.id,true);   // stagiaire : le temps du chrono de l'ours s'ajoute à la tâche
   const p=state.player; let bonus=0;
   if(on&&!t.rewarded){
     t.rewarded=true; p.tasks++; if(t.project)p.steps++;   // compteur du trophée « Méthodique »
@@ -1591,6 +1593,7 @@ function renderProjects(){
   if(!list.length)h+=`<div class="empty" style="padding:60px 0;font-size:24px">Aucun projet ici. Crée-en un pour y mettre consignes, deadline et rendus.</div>`;
   h+='<div class="grid">'+list.map((p,i)=>{
     const dl=deadlineInfo(p), nt=state.tasks.filter(t=>t.project===p.id), nd=nt.filter(t=>t.done).length, lv=lastVer(p);
+    const spent=nt.reduce((s,t)=>s+(t.spent||0),0);   // cumul du chrono de toutes les tâches du projet
     return `<article class="note pcard s-${p.status}" data-pid="${p.id}" data-a="openproj" style="${rot(i)}">
       <img class="clip" src="assets/trombone.png" alt="">
       <span><span class="badge ${p.status}">${STATUS[p.status]}</span></span>
@@ -1605,7 +1608,7 @@ function renderProjects(){
         `<button class="fchip" data-a="openfile" data-pid="${p.id}" data-fid="${x.id}" title="Voir le fichier et ses corrections">${esc(x.name)}${x.n>1?` <b>×${x.n}</b>`:''}</button>`).join('')}
         ${fileCounts[p.id].fix.length>6?`<span>+${fileCounts[p.id].fix.length-6}</span>`:''}</div>`:''}
       ${p.byTutor?'<div><span class="chip tut">👩‍🏫 Attribué par le tuteur</span></div>':''}
-      ${nt.length?`<div><div class="hint">Tâches ${nd}/${nt.length}</div><div class="prog"><i style="width:${nd/nt.length*100}%"></i></div></div>`:'<div class="hint">Aucune tâche</div>'}
+      ${nt.length?`<div><div class="hint row between"><span>Tâches ${nd}/${nt.length}</span>${spent>=60000?`<span title="Temps cumulé de toutes les tâches du projet (chronomètre)">⏱ <b>${fmtDur(spent)}</b></span>`:''}</div><div class="prog"><i style="width:${nd/nt.length*100}%"></i></div></div>`:'<div class="hint">Aucune tâche</div>'}
       <div class="pfchips">${FOLDERS.map(([k,l])=>`<button class="fchip" data-a="openfolder" data-pid="${p.id}" data-folder="${k}" title="Ouvrir le dossier ${l}">${l} <b>${fileCounts[p.id]?.[k]||0}</b></button>`).join('')}</div>
     </article>`}).join('')+'</div>';
   main.innerHTML=h;
@@ -1752,8 +1755,8 @@ function openTask(id){
     <div class="cols">
       <label>Jour<input type="date" name="date" value="${x.date}" required></label>
       <label>Priorité<select name="prio">${[['high','🔴 Haute'],['','⚪ Normale'],['low','🔵 Basse']].map(([v,l])=>`<option value="${v}" ${(x.prio||'')===v?'selected':''}>${l}</option>`).join('')}</select></label>
-      ${view==='admin'?`<label>Temps passé (min)<input type="number" name="spent" min="0" step="1" value="${Math.round((x.spent||0)/60000)}" title="Ajouté par le chronomètre de l'ours ; modifiable"></label>`
-        :`<label>Projet<select name="project">${projOptions(x.project)}</select></label>`}
+      ${view==='admin'?'':`<label>Projet<select name="project">${projOptions(x.project)}</select></label>`}
+      ${tutor?`<label>Temps passé (min)<input type="number" name="spent" min="0" step="1" value="${Math.round((x.spent||0)/60000)}" title="Ajouté par le chronomètre de l'ours ; modifiable par le tuteur"></label>`:''}
     </div>
     <div class="row between">
       <button type="button" class="btn danger" data-a="deltask">Supprimer</button>
@@ -1765,7 +1768,7 @@ function openTask(id){
     if(f.get('date')!==x.date){x.date=f.get('date');x.from=null}
     x.prio=f.get('prio')||undefined;
     if(view!=='admin')x.project=f.get('project')||null;
-    else{const m=Math.max(0,Math.round(+f.get('spent')||0));if(m!==Math.round((x.spent||0)/60000))x.spent=m*60000}   // correction à la main du temps passé
+    if(tutor){const m=Math.max(0,Math.round(+f.get('spent')||0));if(m!==Math.round((x.spent||0)/60000))x.spent=m*60000}   // correction à la main du temps passé
     save(); dlg.close();};
   dlg.querySelector('[data-a=deltask]').onclick=async()=>{if(await ask('Supprimer cette tâche ?')){state.tasks=state.tasks.filter(t=>t!==x);save();dlg.close()}};
 }
@@ -1865,8 +1868,10 @@ async function openProject(id){
     const ts=state.tasks.filter(t=>t.project===p.id).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
     g('#p_tasks').innerHTML=(ts.length?ts.map(t=>`<div class="file"><input type="checkbox" data-tid="${t.id}" ${t.done?'checked':''}>
       <span class="n" style="${t.done?'text-decoration:line-through;color:var(--muted)':''}">${esc(t.title)}</span>
+      ${t.spent>=60000?`<small title="Temps passé (chronomètre)">⏱ ${fmtDur(t.spent)}</small>`:''}
       ${t.done?`<small>${fmt(t.date)}</small>`:`<input type="date" data-tdate="${t.id}" value="${t.date}" title="Changer le jour" style="width:auto;flex:none;padding:4px 6px;font-size:13px">`}
       <button type="button" class="x" data-tdel="${t.id}" title="Supprimer la tâche">×</button></div>`).join('')
+      +((s=>s>=60000?`<div class="hint" style="text-align:right">⏱ Temps total du projet : <b>${fmtDur(s)}</b></div>`:'')(ts.reduce((s,t)=>s+(t.spent||0),0)))
       :'<div class="hint">Découpe le projet en petites tâches : elles apparaissent dans « Ma semaine » au jour choisi.</div>');
   };
   g('#p_taskadd').onsubmit=e=>{e.preventDefault();const [i,d]=e.target.querySelectorAll('input'),v=i.value.trim();if(!v)return;
@@ -2640,7 +2645,7 @@ function pushWidget(){
   W.widgetEnable(true);
   W.widgetState({first:profile.first,img:c.img,title:c.title,level:L,xpPct:Math.round((p.xp-lo)/(hi-lo)*100),xpTxt:`${p.xp-lo}/${hi-lo} XP`,
     tasks:state.tasks.filter(x=>x.date===t).sort((a,b)=>a.done-b.done||rank[a.prio]-rank[b.prio]||a.created-b.created)
-      .map(x=>({id:x.id,title:x.title,done:!!x.done,prio:x.prio}))});
+      .map(x=>({id:x.id,title:(x.project&&projName(x.project)?projName(x.project)+' · ':'')+x.title,done:!!x.done,prio:x.prio,spent:x.spent||0}))});
 }
 // grande fenêtre cachée : les messages passent par la bulle du compagnon
 // (la coquille signale quand la fenêtre est rangée, la page elle-même reste « visible » pour garder ses minuteries)
