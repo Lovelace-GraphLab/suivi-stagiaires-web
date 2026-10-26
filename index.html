@@ -487,6 +487,10 @@ details summary{cursor:pointer;font-weight:600}
 .acard .kv b{display:block;font-family:var(--fd);font-weight:700;font-size:32px;line-height:1;color:var(--ink)}
 .acard .kv .bad b{color:var(--brick)}
 .acard .name{font-family:var(--fd);font-weight:700;font-size:34px;text-transform:uppercase;color:var(--brick);line-height:.95}
+/* alerte « plus de synchronisation » */
+#syncwarn{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:90;width:min(760px,94vw);display:flex;gap:14px;align-items:center;
+  background:var(--brick);color:var(--cream);padding:12px 16px;border-radius:10px;box-shadow:0 10px 26px rgba(0,0,0,.45);font-weight:600;font-size:15px}
+#syncwarn span{flex:1}
 /* poste tuteur : alertes d'inactivité */
 .tpc{margin-bottom:30px;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
 .tpc input{width:22px;height:22px;accent-color:var(--brick);flex:none;margin:2px 0 0}
@@ -584,7 +588,35 @@ const ME_ID='_tuteur';
 store.tutorData=store.tutorData||{tasks:[],projects:[]};
 let state={tasks:[],projects:[]}, profile=null, tutor=false, view='home';
 let syncHook=null;   // branché par le module de synchronisation : chaque enregistrement part aussi en ligne
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){notify("Impossible d'enregistrer : espace de stockage du navigateur indisponible.")}if(syncHook)syncHook()};
+const save=()=>{store.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){notify("Impossible d'enregistrer : espace de stockage du navigateur indisponible.")}if(syncHook)syncHook();scheduleBackup()};
+
+/* ---------- sauvegarde de secours (appli installée) ----------
+   En plus du stockage du navigateur, les données (et l'état de la synchro) sont écrites dans un fichier par la coquille.
+   Si le stockage du navigateur lâche (c'est arrivé le 23/10 après un arrêt brutal du PC), rien n'est perdu :
+   au démarrage, si le fichier est plus récent, on le reprend, puis la synchro l'envoie en ligne. */
+let backupTimer=null;
+// au plus tard 1,5 s après la première modification (les suivantes ne repoussent pas l'écriture)
+function scheduleBackup(){if(window.desktop?.backup&&!backupTimer)backupTimer=setTimeout(writeBackup,1500)}
+function writeBackup(){
+  clearTimeout(backupTimer); backupTimer=null; if(!window.desktop?.backup)return Promise.resolve(false);
+  let shadow=null, meta=null; try{shadow=localStorage.getItem('suivi-sync-shadow2');meta=localStorage.getItem('suivi-sync-meta')}catch(e){}
+  return window.desktop.backup.write(JSON.stringify({savedAt:store.savedAt||Date.now(),store,shadow,meta})).catch(()=>false);
+}
+const backupCheck=(async()=>{
+  const B=window.desktop?.backup; if(!B)return;
+  try{
+    const raw=await B.read(); if(!raw)return writeBackup();   // premier lancement avec la sauvegarde : on la crée
+    const b=JSON.parse(raw);
+    if(!Array.isArray(b.store?.profiles)||(b.savedAt||0)<=(store.savedAt||0)+1000)return;
+    if(sessionStorage.getItem('suivi-restored')===String(b.savedAt))return;   // déjà repris une fois : pas de boucle
+    sessionStorage.setItem('suivi-restored',String(b.savedAt));
+    localStorage.setItem(KEY,JSON.stringify(b.store));
+    if(b.shadow)localStorage.setItem('suivi-sync-shadow2',b.shadow);
+    if(b.meta)localStorage.setItem('suivi-sync-meta',b.meta);
+    window.desktop.log?.(`reprise de la sauvegarde de secours du ${new Date(b.savedAt).toLocaleString('fr-FR')} (stockage du navigateur moins récent)`);
+    location.reload(); await new Promise(()=>{});   // la page repart avec les données récupérées
+  }catch(e){window.desktop.log?.('lecture sauvegarde de secours : '+e.message)}
+})();
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 // simple empreinte du code (dissuasif : les données restent lisibles dans le navigateur)
@@ -665,9 +697,12 @@ const Sync=(()=>{
   let shadow=load('suivi-sync-shadow2',{}), meta=load('suivi-sync-meta',{});
   meta.device=meta.device||uid(); meta.fileQueue=meta.fileQueue||[];
   if(!Object.keys(shadow).length)meta.since=null;   // pas d'historique sur ce poste : on relit tout depuis le début
-  const keep=()=>{try{localStorage.setItem('suivi-sync-shadow2',JSON.stringify(shadow));localStorage.setItem('suivi-sync-meta',JSON.stringify(meta))}catch(e){}};
+  const keep=()=>{try{localStorage.setItem('suivi-sync-shadow2',JSON.stringify(shadow));localStorage.setItem('suivi-sync-meta',JSON.stringify(meta))}catch(e){}scheduleBackup()};
   let timer=null, busy=false, again=false, status=sb?'connexion…':'hors ligne', listeners=[];
-  const setStatus=s=>{status=s;listeners.forEach(f=>f(s))};
+  const setStatus=(s,err)=>{
+    if(s!==status)window.desktop?.log?.(`synchro : ${s}${err?' ('+(err.message||err)+')':''}`);   // journal : changements d'état seulement
+    status=s;listeners.forEach(f=>f(s));
+  };
 
   // ---- données ----
   function explode(){
@@ -859,7 +894,7 @@ const Sync=(()=>{
   async function flush(){
     if(!sb)return; if(busy){again=true;return} busy=true;
     try{await push();await flushFiles();setStatus('synchronisé')}
-    catch(e){setStatus('hors ligne')}
+    catch(e){setStatus('hors ligne',e)}
     finally{busy=false;if(again){again=false;schedule()}}
   }
   async function start(){
@@ -867,13 +902,13 @@ const Sync=(()=>{
     syncHook=schedule;
     // au démarrage, on revérifie toute la liste des fichiers (quelques Ko) : une fiche perdue sur ce poste revient toute seule
     meta.fsince=null;
-    try{await pull();await flush()}catch(e){setStatus('hors ligne')}
+    try{await pull();await flush()}catch(e){setStatus('hors ligne',e)}
     sb.channel('suivi')
       .on('postgres_changes',{event:'*',schema:'public',table:'items'},p=>p.new?.id&&applyRows([p.new]))
       .on('postgres_changes',{event:'*',schema:'public',table:'files'},p=>p.new?.id&&applyFiles([p.new]))
       .on('postgres_changes',{event:'*',schema:'public',table:'settings'},p=>p.new?.id&&applySettings([p.new]))
       .subscribe(s=>{if(s==='SUBSCRIBED')setStatus('synchronisé');else if(s==='CHANNEL_ERROR'||s==='TIMED_OUT'||s==='CLOSED')setStatus('hors ligne')});
-    setInterval(async()=>{try{await pull();await flush()}catch(e){setStatus('hors ligne')}},60000);   // rattrapage régulier
+    setInterval(async()=>{try{await pull();await flush()}catch(e){setStatus('hors ligne',e)}},60000);   // rattrapage régulier
     addEventListener('online',()=>{pull().then(flush).catch(()=>{})});
     addEventListener('offline',()=>setStatus('hors ligne'));
   }
@@ -2642,7 +2677,30 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!dlg.open
 refreshCounts().then(render);
 // synchronisation en ligne + indicateur d'état en haut à droite
 Sync.onStatus(s=>{const d=$('#syncdot');d.textContent=(s==='synchronisé'?'● ':'○ ')+s;d.className=s==='synchronisé'?'ok':''});
-if(Sync.enabled)Sync.start().finally(ensureDemo); else ensureDemo();
+// la synchro démarre une fois la sauvegarde de secours vérifiée (sinon elle pourrait partir de données moins récentes)
+if(Sync.enabled)backupCheck.then(()=>Sync.start()).finally(ensureDemo); else ensureDemo();
+
+/* ---------- alerte : plus de synchronisation depuis 10 min ---------- */
+// (le 23/10, l'appli n'a rien pu envoyer de la journée sans que ce soit visible : seul le petit « ○ hors ligne » le disait)
+let syncOkAt=Date.now(), syncWarned=false;
+Sync.onStatus(s=>{if(s==='synchronisé'){syncOkAt=Date.now();if(syncWarned){syncWarned=false;$('#syncwarn')?.remove();toast('✓ Synchronisation rétablie')}}});
+setInterval(()=>{
+  if(!Sync.enabled||syncWarned||Date.now()-syncOkAt<10*60e3)return;
+  syncWarned=true; scheduleBackup();
+  const txt="L'appli n'arrive plus à se synchroniser depuis 10 minutes. Tes modifications sont gardées sur ce PC. Si ça dure, quitte complètement l'appli (icône près de l'horloge › Quitter) puis relance-la.";
+  window.desktop?.log?.('alerte affichée : pas de synchro depuis 10 min');
+  const b=document.createElement('div'); b.id='syncwarn'; b.innerHTML=`<span>⚠ ${esc(txt)}</span><button class="btn sm" type="button">OK</button>`;
+  b.querySelector('button').onclick=()=>b.remove(); document.body.append(b);
+  if(hiddenDesktop())window.desktop.widgetSay({who:'⚠ Synchronisation',text:txt});
+},60e3);
+
+/* ---------- un processus interne de l'appli est tombé (réseau, stockage…) ---------- */
+// on écrit tout de suite la sauvegarde de secours, puis on recharge la page pour la reconnecter (rien n'est perdu)
+window.desktop?.onServiceGone?.(async d=>{
+  await writeBackup();
+  try{sessionStorage.setItem('suivi-hidden',hiddenDesktop()?'1':'')}catch(e){}
+  setTimeout(()=>location.reload(),1500);
+});
 </script>
 </body>
 </html>
