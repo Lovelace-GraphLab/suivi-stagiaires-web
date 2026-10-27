@@ -671,7 +671,12 @@ function spreadDays(n,deadline){
 }
 
 /* ---------- report automatique des tâches non terminées ---------- */
+// Pas de report avant d'avoir récupéré les dernières données en ligne : sinon un appareil resté fermé quelques jours
+// reporterait des tâches cochées entre-temps ailleurs, et ce report écraserait les coches (arrivé le 27/10).
+let rolloverReady=false;
+function rolloverAll(){rolloverReady=true;for(const pr of store.profiles)if(pr.data)rollover(pr.data);rollover(store.tutorData);render();renderHUD?.()}
 function rollover(d=state){
+  if(!rolloverReady)return;
   let target=today();
   if(parse(target).getDay()===6)target=addDays(target,2); else if(parse(target).getDay()===0)target=addDays(target,1);
   let changed=false;
@@ -773,7 +778,17 @@ const Sync=(()=>{
       const local=cur[r.id], localS=local?canon(local.doc):undefined, remoteS=canon(r.doc);
       // en attente = modifié sur ce poste depuis la dernière synchro ; sans historique, c'est la version en ligne qui fait foi
       const pending=localS!==undefined&&!!shadow[r.id]&&shadow[r.id].s!==localS;
-      if(pending)continue;
+      if(pending){
+        // exception : une tâche cochée ailleurs l'emporte sur une version locale non cochée (report, copie ancienne…) ;
+        // on garde le plus grand temps de chrono des deux
+        if(r.kind==='task'&&!r.deleted&&r.doc?.done&&!local.doc.done){
+          const sp=Math.max(local.doc.spent||0,r.doc.spent||0);
+          shadow[r.id]={s:remoteS,p:r.profile_id,k:r.kind};
+          applyRow(sp>(r.doc.spent||0)?{...r,doc:{...r.doc,spent:sp}}:r); changed=true;
+          window.desktop?.log?.(`conflit : « ${r.doc.title} » cochée ailleurs, gardée cochée`);
+        }
+        continue;
+      }
       if(r.deleted){delete shadow[r.id]; if(local){applyRow(r);changed=true}; continue}
       shadow[r.id]={s:remoteS,p:r.profile_id,k:r.kind};
       if(localS!==remoteS){applyRow(r);changed=true}
@@ -2819,7 +2834,9 @@ refreshCounts().then(render);
 // synchronisation en ligne + indicateur d'état en haut à droite
 Sync.onStatus(s=>{const d=$('#syncdot');d.textContent=(s==='synchronisé'?'● ':'○ ')+s;d.className=s==='synchronisé'?'ok':''});
 // la synchro démarre une fois la sauvegarde de secours vérifiée (sinon elle pourrait partir de données moins récentes)
-if(Sync.enabled)backupCheck.then(()=>Sync.start()).finally(ensureDemo); else ensureDemo();
+// le report des tâches non faites attend la première synchro (ou son échec, hors ligne)
+if(Sync.enabled)backupCheck.then(()=>Sync.start()).finally(()=>{ensureDemo();rolloverAll()}); else {ensureDemo();rolloverAll()}
+setTimeout(()=>{if(!rolloverReady)rolloverAll()},30000);   // filet : synchro bloquée au démarrage
 
 /* ---------- alerte : plus de synchronisation depuis 10 min ---------- */
 // (le 23/10, l'appli n'a rien pu envoyer de la journée sans que ce soit visible : seul le petit « ○ hors ligne » le disait)
