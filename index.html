@@ -480,6 +480,23 @@ details summary{cursor:pointer;font-weight:600}
 /* ---------- tuteur ---------- */
 .panel{padding:32px 28px 28px 40px;margin-bottom:38px;display:flex;flex-direction:column;gap:10px}
 .panel .title{font-size:36px}
+/* Production : étiquettes kraft (trou + œillet), état en 3 boutons */
+.tags{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:34px 26px}
+.ptag{position:relative;cursor:pointer;display:flex;flex-direction:column;gap:9px;padding:46px 22px 18px;background:var(--kraft) center/600px;
+  border-radius:6px;clip-path:polygon(16% 0,84% 0,100% 12%,100% 100%,0 100%,0 12%);box-shadow:0 10px 22px rgba(0,0,0,.3);transform:rotate(var(--r,0deg));transition:transform .15s}
+.ptag:hover{transform:rotate(0) translateY(-3px)}
+.ptag .hole{position:absolute;top:14px;left:calc(50% - 9px);width:18px;height:18px;border-radius:50%;background:var(--paper);box-shadow:inset 0 2px 3px rgba(0,0,0,.35),0 0 0 4px rgba(255,255,255,.5)}
+.ptag .title{font-size:28px;word-break:break-word}
+.ptag dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;margin:4px 0 0;font-size:14.5px}
+.ptag dt{font-weight:600;color:var(--brick);font-size:12px;letter-spacing:.1em;text-transform:uppercase;padding-top:2px}
+.ptag dd{margin:0}
+.ptag.s-delivered{opacity:.75}
+.pstat{display:flex;border-radius:99px;overflow:hidden;border:1.5px solid rgba(59,33,22,.35);margin-top:6px;background:rgba(255,255,255,.55)}
+.pstat button{flex:1;border:0;background:none;padding:7px 4px;font:600 12.5px var(--fb);cursor:pointer;color:var(--ink)}
+.pstat button+button{border-left:1.5px solid rgba(59,33,22,.2)}
+.pstat button.on{color:#fff}
+.s-todo .pstat button.on{background:var(--brick)} .s-ordered .pstat button.on{background:var(--mustard);color:var(--ink)} .s-delivered .pstat button.on{background:var(--green)}
+.cal .c.ord{box-shadow:inset 0 0 0 2px #b9ab98}
 .acard{padding:28px 20px 20px;display:flex;flex-direction:column;gap:13px;background-image:var(--creme)!important;transform:rotate(var(--r,0deg))}
 .acard .hint{color:var(--ink)}
 .acard .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px}
@@ -586,6 +603,7 @@ try{const s=JSON.parse(localStorage.getItem(KEY));if(s&&Array.isArray(s.profiles
 // « Ma semaine » du tuteur : ses propres tâches, synchronisées sous le profil technique ME_ID (jamais listé comme stagiaire)
 const ME_ID='_tuteur';
 store.tutorData=store.tutorData||{tasks:[],projects:[]};
+store.tutorData.prod=store.tutorData.prod||[];   // « Production » du tuteur : commandes chez les fournisseurs
 let state={tasks:[],projects:[]}, profile=null, tutor=false, view='home';
 let syncHook=null;   // branché par le module de synchronisation : chaque enregistrement part aussi en ligne
 const save=()=>{store.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(store))}catch(e){notify("Impossible d'enregistrer : espace de stockage du navigateur indisponible.")}if(syncHook)syncHook();scheduleBackup()};
@@ -715,6 +733,7 @@ const Sync=(()=>{
       for(const p of data?.projects||[])m['project:'+p.id]={profile_id:pr.id,kind:'project',doc:p};
     }
     for(const t of store.tutorData?.tasks||[])m['task:'+t.id]={profile_id:ME_ID,kind:'task',doc:t};
+    for(const p of store.tutorData?.prod||[])m['project:'+p.id]={profile_id:ME_ID,kind:'project',doc:p};   // étiquettes Production
     return m;
   }
   const replaceKeep=(target,src,keepKeys=[])=>{
@@ -723,9 +742,9 @@ const Sync=(()=>{
   };
   function applyRow(r){
     const oid=r.id.slice(r.id.indexOf(':')+1);
-    if(r.profile_id===ME_ID){   // tâches du tuteur
-      if(r.kind!=='task')return;
-      const arr=store.tutorData.tasks, i=arr.findIndex(x=>x.id===oid);
+    if(r.profile_id===ME_ID){   // tâches du tuteur, et étiquettes Production (kind « project »)
+      if(r.kind!=='task'&&r.kind!=='project')return;
+      const arr=r.kind==='task'?store.tutorData.tasks:(store.tutorData.prod=store.tutorData.prod||[]), i=arr.findIndex(x=>x.id===oid);
       if(r.deleted){if(i>=0)arr.splice(i,1)} else if(i>=0)replaceKeep(arr[i],r.doc); else arr.push(r.doc);
       return;
     }
@@ -1433,8 +1452,8 @@ const playerOf=pr=>ensurePlayer(pr.data);
 const TABS={week:['Ma semaine','kraft'],projects:['Projets','rouge'],files:['Fichiers','jaune'],profile:['Profil','creme']};
 // téléphone / tablette (écran tactile, hors appli installée) : barre d'onglets en bas, un jour à la fois, pas d'alerte d'inactivité
 const PHONE=!window.desktop&&matchMedia('(pointer:coarse)').matches;
-const TAB_IC={week:'📅',projects:'📌',files:'📁',profile:'🙂',dash:'📋',logout:'🚪'};
-const TAB_SHORT={week:'Semaine',dash:'Tableau',logout:'Quitter'};
+const TAB_IC={week:'📅',projects:'📌',files:'📁',profile:'🙂',dash:'📋',logout:'🚪',prod:'🏭'};
+const TAB_SHORT={week:'Semaine',dash:'Tableau',logout:'Quitter',prod:'Prod'};
 const tabBtn=(k,cls,attr,label,extra='')=>`<button class="tab ${cls}" ${attr} data-ic="${TAB_IC[k]}"><span class="tl">${label}</span><span class="ts">${TAB_SHORT[k]||label}</span>${extra}</button>`;
 
 function renderChrome(){
@@ -1461,6 +1480,7 @@ function renderChrome(){
 function renderTabs(){
   let h='';
   if(view==='admin')h=tabBtn('dash',`jaune ${ui.atab!=='week'?'on':''}`,'data-atab="dash"','Tableau de bord')+tabBtn('week',`kraft ${ui.atab==='week'?'on':''}`,'data-atab="week"','Ma semaine')
+    +tabBtn('prod',`creme ${ui.atab==='prod'?'on':''}`,'data-atab="prod"','Production')
     +`<span class="sp"></span>`+tabBtn('logout','creme','data-t="logout"','Quitter');
   else if(view==='app'){
     // pastille : projets avec corrections demandées ou commentaires du tuteur non traités
@@ -1469,12 +1489,12 @@ function renderTabs(){
       +`<span class="sp"></span>`+(tutor?tabBtn('dash','jaune','data-t="dash"','Tableau de bord'):tabBtn('logout','jaune','data-t="logout"','Déconnexion'));
   }
   $('#tabs').innerHTML=h;
-  $('#folder').className=view==='admin'?(ui.atab==='week'?'f-kraft':'f-jaune'):'f-'+(TABS[ui.tab]||TABS.week)[1];
+  $('#folder').className=view==='admin'?({week:'f-kraft',prod:'f-creme'}[ui.atab]||'f-jaune'):'f-'+(TABS[ui.tab]||TABS.week)[1];
 }
 
 function render(){
   pushWidget();
-  if(view==='admin'){renderTabs();return ui.atab==='week'?renderWeek():renderAdmin()}
+  if(view==='admin'){renderTabs();return ui.atab==='week'?renderWeek():ui.atab==='prod'?renderProd():renderAdmin()}
   if(view!=='app')return;
   renderTabs();
   if(ui.tab==='week')renderWeek();
@@ -1527,6 +1547,93 @@ function renderWeek(){
 }
 
 /* calendrier mensuel : jours de deadline en couleur (rouge = en retard/aujourd'hui, jaune = à venir, vert = terminé) */
+/* ---------- Production (espace tuteur) : commandes chez les fournisseurs ---------- */
+// étiquette = {id, client, name, supplier, orderDate, deliveryDate, status:'todo'|'ordered'|'delivered', notes, projectId, intern}
+const PROD_STATUS={todo:'À commander',ordered:'Commandé',delivered:'Livré'};
+const prodList=()=>store.tutorData.prod||(store.tutorData.prod=[]);
+function deliveryInfo(x){
+  if(x.status==='delivered')return {txt:'livré'+(x.deliveredAt?' le '+fmt(x.deliveredAt):''),cls:'ok'};
+  if(!x.deliveryDate)return null;
+  const k=diffDays(x.deliveryDate,today());
+  return k<0?{txt:`en retard de ${-k} j`,cls:'late'}:k===0?{txt:"aujourd'hui",cls:'late'}:{txt:`dans ${k} j`,cls:k<=3?'soon':''};
+}
+function renderProd(){
+  const f=ui.prodFilter||'all', all=prodList();
+  const order={todo:0,ordered:1,delivered:2};
+  const list=all.filter(x=>f==='all'||x.status===f)
+    .sort((a,b)=>order[a.status]-order[b.status]||((a.deliveryDate||'9')<(b.deliveryDate||'9')?-1:1));
+  let h=`<div class="weekbar"><h2 class="title" style="font-size:44px">Production</h2><button class="btn primary" data-a="newprod" style="margin-left:auto">+ Nouvelle commande</button></div>
+    <div class="filters">${['all','todo','ordered','delivered'].map(k=>`<button class="btn ${f===k?'on':''}" data-a="prodfilter" data-f="${k}">${k==='all'?'Toutes':PROD_STATUS[k]}<small> ${k==='all'?all.length:all.filter(x=>x.status===k).length}</small></button>`).join('')}</div>`;
+  h+=list.length?'<div class="tags">'+list.map((x,i)=>{const di=deliveryInfo(x);
+    return `<article class="ptag s-${x.status}" style="${rot(i)}" data-a="editprod" data-id="${x.id}">
+      <span class="hole"></span>
+      <div class="kicker">${esc(x.client||'Client ?')}</div>
+      <h3 class="title">${esc(x.name||'Sans titre')}</h3>
+      ${x.intern?`<div class="hint">Projet de ${esc(x.intern)}</div>`:''}
+      <dl><dt>Fournisseur</dt><dd>${esc(x.supplier||'—')}</dd>
+        <dt>Commande</dt><dd>${x.orderDate?fmt(x.orderDate):'—'}</dd>
+        <dt>Livraison prévue</dt><dd>${x.deliveryDate?fmt(x.deliveryDate):'—'}${di?` <span class="badge ${di.cls==='late'?'late':di.cls==='ok'?'ok':'ghost'}">${di.txt}</span>`:''}</dd></dl>
+      <div class="pstat">${Object.entries(PROD_STATUS).map(([k,l])=>`<button type="button" class="${x.status===k?'on':''}" data-a="prodstatus" data-id="${x.id}" data-s="${k}">${l}</button>`).join('')}</div>
+    </article>`}).join('')+'</div>'
+    :`<div class="empty" style="padding:40px 0;font-size:22px">${all.length?'Aucune commande dans cette catégorie.':'Aucune commande pour le moment. Crée une étiquette, ou envoie un projet en production depuis sa fiche.'}</div>`;
+  main.innerHTML=h+prodCalendarHTML();
+}
+// calendrier du mois : 📦 commandes et 🚚 livraisons prévues (couleur = état), liste des prochaines échéances
+function prodCalendarHTML(){
+  const t=today(), first=ui.prodMonth||(ui.prodMonth=t.slice(0,8)+'01'), fd=parse(first);
+  const lead=(fd.getDay()+6)%7, n=new Date(fd.getFullYear(),fd.getMonth()+1,0).getDate();
+  const ev={}; const add=(d,e)=>{if(d)(ev[d]=ev[d]||[]).push(e)};
+  for(const x of prodList()){add(x.orderDate,{k:'order',x}); if(x.status!=='delivered'||x.deliveryDate)add(x.status==='delivered'&&x.deliveredAt?x.deliveredAt:x.deliveryDate,{k:'deliv',x})}
+  let cells=['L','M','M','J','V','S','D'].map(d=>`<div class="dh">${d}</div>`).join('');
+  for(let i=0;i<lead;i++)cells+='<div></div>';
+  for(let d=1;d<=n;d++){
+    const ds=iso(new Date(fd.getFullYear(),fd.getMonth(),d)), es=ev[ds]||[], dv=es.filter(e=>e.k==='deliv');
+    let cls='c'+(isWE(ds)?' we':'')+(ds===t?' td':'');
+    if(dv.length)cls+=' dl'+(dv.every(e=>e.x.status==='delivered')?' ok':ds>t?' soon':'');
+    else if(es.length)cls+=' ord';
+    const tips=es.map(e=>(e.k==='order'?'📦 Commande : ':'🚚 Livraison : ')+(e.x.client?e.x.client+' › ':'')+(e.x.name||''));
+    cells+=`<div class="${cls}"${tips.length?` title="${esc(tips.join('\n'))}"`:''}>${d}${es.length>1?`<i>${es.length}</i>`:''}</div>`;
+  }
+  const up=prodList().filter(x=>x.status!=='delivered').sort((a,b)=>(a.deliveryDate||'9')<(b.deliveryDate||'9')?-1:1).slice(0,8);
+  const list=up.length?up.map(x=>{const di=deliveryInfo(x);
+    return `<div class="dli ${di?.cls==='late'?'late':''}" data-a="editprod" data-id="${x.id}"><span class="n">${x.status==='todo'?'📦':'🚚'} ${esc((x.client?x.client+' › ':'')+(x.name||''))}<br><small>${esc(PROD_STATUS[x.status])}${x.supplier?' · '+esc(x.supplier):''}</small></span>
+      <small>${x.deliveryDate?fmt(x.deliveryDate):'date ?'}${di?'<br>'+di.txt:''}</small></div>`}).join('')
+    :'<div class="empty" style="text-align:left">Tout est livré 🎉</div>';
+  return `<div class="calbox" style="margin-top:40px"><span class="tape" style="left:8%;transform:rotate(-8deg)"></span><div>
+    <div class="calhead"><button class="btn sm" data-a="prodprev">←</button><h3 class="title">${fd.toLocaleDateString('fr-FR',{month:'long',year:'numeric'})}</h3><button class="btn sm" data-a="prodnext">→</button></div>
+    <div class="cal">${cells}</div>
+    <div class="legend"><span style="--c:var(--brick)">Livraison en retard / aujourd'hui</span><span style="--c:var(--mustard)">Livraison prévue</span><span style="--c:var(--green)">Livré</span><span style="--c:#b9ab98">Commande</span></div>
+  </div><div class="dllist"><h3 class="title">Prochaines livraisons</h3>${list}</div></div>`;
+}
+// créer / modifier une étiquette
+function openProd(id,preset){
+  let x=prodList().find(p=>p.id===id); const isNew=!x;
+  if(isNew)x=Object.assign({id:uid(),client:'',name:'',supplier:'',orderDate:'',deliveryDate:'',status:'todo',notes:'',created:Date.now()},preset||{});
+  dlg.innerHTML=`<form class="dlg" id="pf"><h2 class="title">${isNew?'Nouvelle commande':'Commande'}</h2>
+    <div class="cols"><label>Client<input name="client" value="${esc(x.client)}" placeholder="Ex : Lovelace"></label>
+    <label>Projet<input name="name" value="${esc(x.name)}" required placeholder="Ex : Flyer A5"></label></div>
+    <label>Fournisseur<input name="supplier" value="${esc(x.supplier)}" placeholder="Ex : imprimerie, sérigraphe…"></label>
+    <div class="cols"><label>Date de commande<input type="date" name="orderDate" value="${x.orderDate}"></label>
+    <label>Livraison prévue<input type="date" name="deliveryDate" value="${x.deliveryDate}"></label>
+    <label>État<select name="status">${Object.entries(PROD_STATUS).map(([k,l])=>`<option value="${k}" ${x.status===k?'selected':''}>${l}</option>`).join('')}</select></label></div>
+    <label>Notes<textarea name="notes" placeholder="Quantité, format, papier, devis…">${esc(x.notes||'')}</textarea></label>
+    <div class="row between">${isNew?'<span></span>':'<button type="button" class="btn danger" id="pdel">Supprimer</button>'}
+      <div class="row"><button type="button" class="btn" data-a="close">Annuler</button><button class="btn primary">${isNew?'Créer':'Enregistrer'}</button></div></div></form>`;
+  dlg.showModal();
+  $('#pf').onsubmit=e=>{e.preventDefault();const f=new FormData(e.target);
+    for(const k of ['client','name','supplier','orderDate','deliveryDate','notes'])x[k]=String(f.get(k)||'').trim();
+    setProdStatus(x,f.get('status'),true);
+    if(isNew)prodList().push(x); save(); dlg.close();};
+  const del=$('#pdel'); if(del)del.onclick=async()=>{if(await ask(`Supprimer la commande « ${x.name} » ?`)){store.tutorData.prod=prodList().filter(p=>p!==x);save();dlg.close()}};
+}
+// changement d'état : « Commandé » sans date → commandé aujourd'hui ; « Livré » → date de livraison réelle
+function setProdStatus(x,s,quiet){
+  if(!PROD_STATUS[s])return; x.status=s;
+  if(s!=='todo'&&!x.orderDate)x.orderDate=today();
+  if(s==='delivered'){x.deliveredAt=x.deliveredAt||today()} else delete x.deliveredAt;
+  if(!quiet){save();render();toast(`🏭 ${x.name} : ${PROD_STATUS[s]}`)}
+}
+
 function calendarHTML(){
   const t=today(), first=ui.calMonth||(ui.calMonth=t.slice(0,8)+'01'), fd=parse(first);
   const lead=(fd.getDay()+6)%7, n=new Date(fd.getFullYear(),fd.getMonth()+1,0).getDate();
@@ -1799,7 +1906,9 @@ async function openProject(id){
     <div id="p_folders" style="display:flex;flex-direction:column;gap:12px"></div>
     <div class="row between" style="margin-top:6px">
       ${isNew?'<span></span>':'<button class="btn danger" id="p_del">Supprimer le projet</button>'}
-      <button class="btn primary" id="p_ok">${isNew?'Créer':'Fermer'}</button>
+      <span class="row">${tutor&&!isNew?(pr=>pr?`<span class="badge ghost" title="Voir l'onglet Production">🏭 En production · ${PROD_STATUS[pr.status]}</span>`
+        :'<button type="button" class="btn" id="p_prod" title="Crée une étiquette dans l\'onglet Production (fournisseur, dates…)">🏭 Envoyer en production</button>')(prodList().find(x=>x.projectId===p.id)):''}
+      <button class="btn primary" id="p_ok">${isNew?'Créer':'Fermer'}</button></span>
     </div></div>`;
   dlg.showModal();
   const g=s=>dlg.querySelector(s);
@@ -1889,6 +1998,7 @@ async function openProject(id){
   drawFolders(); drawReview(); drawTasks();
 
   g('#p_ok').onclick=()=>{ if(isNew&&!g('#p_name').value.trim()){g('#p_name').focus();return} commit(); dlg.close(); };
+  const pb=g('#p_prod'); if(pb)pb.onclick=()=>{commit();openProd(null,{client:p.client||'',name:p.name,projectId:p.id,intern:profile?`${profile.first} ${profile.last}`:''})};
   g('#p_x').onclick=()=>{ if(!isNew||g('#p_name').value.trim())commit(); dlg.close(); };   // nouveau projet sans nom : simple annulation
   const del=g('#p_del');
   if(del)del.onclick=async()=>{
@@ -2277,6 +2387,12 @@ main.addEventListener('click',async e=>{
   else if(a==='calprev'||a==='calnext'){const d=parse(ui.calMonth);ui.calMonth=iso(new Date(d.getFullYear(),d.getMonth()+(a==='calnext'?1:-1),1));render()}
   else if(a==='calday'){ui.weekStart=mondayOf(el.dataset.d);ui.mday=workday(el.dataset.d);render()}
   else if(a==='mday'){ui.mday=el.dataset.d;render()}
+  // Production (tuteur)
+  else if(a==='newprod')openProd(null);
+  else if(a==='editprod')openProd(el.dataset.id);
+  else if(a==='prodstatus'){e.stopPropagation();const x=prodList().find(p=>p.id===el.dataset.id);if(x&&x.status!==el.dataset.s)setProdStatus(x,el.dataset.s)}
+  else if(a==='prodfilter'){ui.prodFilter=el.dataset.f;render()}
+  else if(a==='prodprev'||a==='prodnext'){const d=parse(ui.prodMonth);ui.prodMonth=iso(new Date(d.getFullYear(),d.getMonth()+(a==='prodnext'?1:-1),1));render()}
   else if(a==='edit')openTask(id);
   else if(a==='prio'){const x=state.tasks.find(t=>t.id===id);x.prio={undefined:'high',high:'low',low:undefined}[x.prio];save();render()}
   else if(a==='openproj'){e.stopPropagation();openProject(el.dataset.pid)}
