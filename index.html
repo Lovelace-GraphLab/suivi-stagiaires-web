@@ -2308,7 +2308,8 @@ home.addEventListener('click',async e=>{
 
 /* ---------- bêta : profil démo toujours présent ---------- */
 // passer BETA à false pour la mise en ligne : le profil démo et l'accès rapide disparaissent de l'accueil
-const BETA=true, DEMO_ID='demo-beta';
+const BETA=false, DEMO_ID='demo-beta';   // bêta terminée (02/11) : plus de profil démo
+if(!BETA&&store.profiles.some(p=>p.id===DEMO_ID)){store.profiles=store.profiles.filter(p=>p.id!==DEMO_ID);save()}   // retiré aussi des postes qui l'avaient encore
 function demoProfile(){
   const t=today(), m=mondayOf(t), wd=i=>addDays(m,i), uidT=()=>uid();
   const pr={id:DEMO_ID,first:'Démo',last:'Bêta',start:addDays(t,-40),end:addDays(t,50),data:{tasks:[],projects:[]}};
