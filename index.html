@@ -1296,6 +1296,57 @@ function ensureCharteDirs(){
     }});
 }
 const driveFiles=()=>window.desktop?.files||null;
+
+/* ---------- fichiers rangés directement dans le Finder / l'Explorateur ----------
+   L'appli parcourt « Prénom Nom / Client / Projet / Dossier » dans le Drive et ajoute les fichiers qu'elle ne connaît pas
+   (identifiant tiré du chemin : deux postes qui les trouvent créent la même fiche). Un fichier renommé dans le Finder
+   (même dossier, même taille, ancien nom disparu) garde sa fiche, ses corrections et son temps. */
+const MIME={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',webp:'image/webp',svg:'image/svg+xml',pdf:'application/pdf'};
+const mimeOf=n=>MIME[splitExt(n)[1].toLowerCase()]||'';
+let driveScanAt=0, driveScanning=false;
+async function scanDrive(force){
+  const W=driveFiles(); if(!W?.list||!profile||view!=='app'||driveScanning)return;
+  if(!force&&Date.now()-driveScanAt<20000)return;
+  driveScanning=true; driveScanAt=Date.now();
+  try{
+    if(!(await W.root()))return;
+    const person=safeName(`${profile.first} ${profile.last}`), low=s=>s.toLowerCase();
+    const disk=await W.list(person); if(!disk.length)return;
+    const known=await allFiles(), byRel=new Set(known.filter(f=>f.drive&&f.rel).map(f=>low(f.rel)));
+    const onDisk=new Set(disk.map(d=>low(d.rel)));
+    const missing=known.filter(f=>f.drive&&f.rel&&low(f.rel).startsWith(low(person)+'/')&&!onDisk.has(low(f.rel)));
+    const projByDir={}; for(const p of state.projects)projByDir[low(safeName(p.client||'Sans client')+'/'+safeName(p.name))]=p;
+    const clients=[...new Set(state.projects.map(p=>p.client).filter(Boolean))];
+    const key1=Object.fromEntries(FOLDERS.map(([k,l])=>[low(l),k])), key2=Object.fromEntries(CHARTE_FOLDERS.map(([k,l])=>[low(l),k]));
+    let added=0, renamed=0;
+    for(const d of disk){
+      if(byRel.has(low(d.rel)))continue;
+      const parts=d.rel.split('/'); if(parts.length!==5)continue;   // personne / client / projet / dossier / fichier
+      const [,c,pr,fold,name]=parts;
+      let p,key;
+      if(low(pr)==='charte'){const cl=clients.find(x=>low(safeName(x))===low(c)); if(!cl)continue; p=charteOf(cl); key=key2[low(fold)]}
+      else{p=projByDir[low(c+'/'+pr)]; key=key1[low(fold)]}
+      if(!p||!key)continue;   // dossier inconnu de l'appli (client ou projet pas encore créé) : ignoré
+      const dir=low(parts.slice(0,4).join('/'))+'/';
+      const old=missing.find(f=>low(f.rel).startsWith(dir)&&f.size===d.size);
+      if(old){missing.splice(missing.indexOf(old),1); old.rel=d.rel; old.name=name; await putFile(old); renamed++; continue}
+      const f={id:'d'+hash('drive',low(d.rel)).slice(1)+hash('rive',low(d.rel)).slice(1),projectId:p.id,folder:key,name,type:mimeOf(name),
+        size:d.size,added:Math.round(d.mtime)||Date.now(),drive:true,rel:d.rel,blob:null,fromDrive:true};
+      if(key==='livrables'){p.versions=p.versions||{}; const ks=Object.keys(p.versions).map(Number); f.v=ks.length?Math.max(...ks):1;
+        if(!p.versions[f.v])p.versions[f.v]={label:'V'+f.v,date:today(),status:'pending',comment:''}}
+      try{const buf=await W.read(d.rel); if(buf){const pv=await makePreview(new File([buf],name,{type:f.type})); if(pv)f.pvBlob=pv}}catch(e){}
+      await putFile(f); byRel.add(low(d.rel)); added++;
+      if(!tutor&&!p.charte)await rewardFile(f,p);   // XP de nommage pour le stagiaire lui-même
+    }
+    if(added||renamed){
+      save(); await refreshCounts(); if(ui.tab==='files'&&!dlg.open&&!$('#vdlg').open)render();
+      toast(`📂 Dossier Google Drive : ${[added&&`${added} fichier(s) ajouté(s)`,renamed&&`${renamed} renommé(s)`].filter(Boolean).join(', ')}`);
+    }
+  }catch(e){window.desktop?.log?.('lecture du dossier Drive : '+e.message)}
+  finally{driveScanning=false}
+}
+setInterval(()=>{if(view==='app'&&ui.tab==='files'&&!document.hidden)scanDrive()},30000);   // onglet Fichiers ouvert : revérifie toutes les 30 s
+
 async function chooseDriveRoot(){
   const W=driveFiles(); if(!W)return;
   if(!tutor&&store.tutorPin){   // réglage du poste : réservé au tuteur
@@ -1769,7 +1820,7 @@ async function renderFiles(){
   const chartes=[...new Set(ps.map(x=>x.client).filter(Boolean))].map(c=>charteOf(c));
   if(!ps.some(p=>p.id===ui.fileProject)&&!chartes.some(c=>c.id===ui.fileProject))ui.fileProject=(ps.find(p=>p.status!=='done')||ps[0]).id;
   const byId=Object.fromEntries([...ps,...chartes].map(x=>[x.id,x])), p=byId[ui.fileProject];
-  ensureCharteDirs();
+  ensureCharteDirs(); scanDrive();   // fichiers rangés à la main dans le Drive
   const all=(await allFiles()).filter(f=>byId[f.projectId]);
   const W=driveFiles(), root=W?await W.root():null;
   if(view!=='app'||ui.tab!=='files')return;   // l'onglet a changé pendant le chargement
