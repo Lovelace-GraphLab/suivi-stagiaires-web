@@ -898,7 +898,9 @@ const Sync=(()=>{
     }
   }
   // contenu d'un fichier venu d'un autre poste : téléchargé à la demande, puis gardé sur le poste
+  // cache des fichiers lus (Drive / aperçus) : limité aux 40 derniers pour ne pas grossir au fil de la journée
   const driveCache=new Map();
+  const cacheBlob=(k,b)=>{driveCache.delete(k);driveCache.set(k,b);while(driveCache.size>40)driveCache.delete(driveCache.keys().next().value)};
   async function blobOf(f){
     if(f.blob)return f.blob;
     if(f.drive){   // rangé dans le Google Drive : lu sur le disque de ce poste (appli installée uniquement)
@@ -906,11 +908,11 @@ const Sync=(()=>{
         if(!sb||!f.preview)return null;
         const k='pv:'+f.id; if(driveCache.has(k))return driveCache.get(k);
         const {data,error}=await sb.storage.from('files').download(f.preview); if(error||!data)return null;
-        driveCache.set(k,data); return data;
+        cacheBlob(k,data); return data;
       }
       if(driveCache.has(f.rel))return driveCache.get(f.rel);
       const buf=await window.desktop.files.read(f.rel); if(!buf)return null;
-      const b=new Blob([buf],{type:f.type||''}); driveCache.set(f.rel,b); return b;
+      const b=new Blob([buf],{type:f.type||''}); cacheBlob(f.rel,b); return b;
     }
     if(!sb||!f.path)return null;
     const {data,error}=await sb.storage.from('files').download(f.path); if(error)return null;
